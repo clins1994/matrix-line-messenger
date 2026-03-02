@@ -102,7 +102,7 @@ func (lc *LineClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 		return lc.chatToChatInfo(&res.Chats[0]), nil
 	}
 
-	contact := lc.getContact(string(portal.ID))
+	contact := lc.getContact(ctx, string(portal.ID))
 	var avatar *bridgev2.Avatar
 	if contact.PicturePath != "" {
 		avatar = &bridgev2.Avatar{
@@ -139,7 +139,7 @@ func (lc *LineClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 }
 
 func (lc *LineClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*bridgev2.UserInfo, error) {
-	contact := lc.getContact(string(ghost.ID))
+	contact := lc.getContact(ctx, string(ghost.ID))
 	var avatar *bridgev2.Avatar
 	if contact.PicturePath != "" {
 		avatar = &bridgev2.Avatar{
@@ -156,14 +156,33 @@ func (lc *LineClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*
 	}, nil
 }
 
-func (lc *LineClient) getContact(mid string) line.Contact {
+func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 	if contact, ok := lc.contactCache[mid]; ok {
 		return contact
 	}
+
+	// Use GetProfile for our own user data
+	if mid == lc.Mid || mid == string(lc.UserLogin.ID) {
+		client := line.NewClient(lc.AccessToken)
+		profile, err := client.GetProfile()
+		if err != nil && lc.isRefreshRequired(err) {
+			if errRefresh := lc.refreshAndSave(ctx); errRefresh == nil {
+				client = line.NewClient(lc.AccessToken)
+				profile, err = client.GetProfile()
+			}
+		}
+		if err == nil && profile != nil {
+			contact := line.Contact{Mid: mid, DisplayName: profile.DisplayName, PicturePath: profile.PicturePath}
+			lc.contactCache[mid] = contact
+			return contact
+		}
+		return line.Contact{Mid: mid, DisplayName: mid}
+	}
+
 	client := line.NewClient(lc.AccessToken)
 	res, err := client.GetContactsV2([]string{mid})
 	if err != nil && lc.isRefreshRequired(err) {
-		if errRefresh := lc.refreshAndSave(context.TODO()); errRefresh == nil {
+		if errRefresh := lc.refreshAndSave(ctx); errRefresh == nil {
 			client = line.NewClient(lc.AccessToken)
 			res, err = client.GetContactsV2([]string{mid})
 		}
