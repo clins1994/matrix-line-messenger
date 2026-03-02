@@ -135,6 +135,10 @@ func (lc *LineClient) ensurePeerKeyForMessage(ctx context.Context, msg *line.Mes
 	if lc.E2EE == nil || len(msg.Chunks) < 5 {
 		return
 	}
+	// Group messages have a different chunk layout
+	if ToType(msg.ToType) == ToRoom || ToType(msg.ToType) == ToGroup {
+		return
+	}
 	senderKeyID, err1 := e2ee.DecodeKeyID(msg.Chunks[len(msg.Chunks)-2])
 	receiverKeyID, err2 := e2ee.DecodeKeyID(msg.Chunks[len(msg.Chunks)-1])
 	myRaw, _, errMy := lc.E2EE.MyKeyIDs()

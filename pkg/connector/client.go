@@ -178,7 +178,13 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 			pin = res.PinCode
 		}
 		if pin != "" {
-			lc.UserLogin.Bridge.Log.Warn().Str("pin", pin).Msg("PIN verification required — enter this PIN on your LINE mobile app to complete re-login")
+			lc.UserLogin.Bridge.Log.Warn().Msg("PIN verification required — check your LINE mobile app to complete re-login")
+			// Send the PIN via bridge state so the user sees it in their Matrix client
+			lc.UserLogin.BridgeState.Send(status.BridgeState{
+				StateEvent: status.StateConnecting,
+				Error:      "line-pin-required",
+				Message:    fmt.Sprintf("Enter this PIN on your LINE mobile app: %s", pin),
+			})
 		}
 		if res.Verifier == "" {
 			return fmt.Errorf("login requires interaction but no verifier returned")
@@ -236,6 +242,7 @@ func (lc *LineClient) ensureValidToken(ctx context.Context) error {
 		return nil
 	}
 	if !lc.isRefreshRequired(err) {
+		lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("GetProfile failed with non-auth error, continuing anyway")
 		return nil
 	}
 
