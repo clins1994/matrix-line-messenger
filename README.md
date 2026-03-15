@@ -90,94 +90,95 @@ Based on the [mautrix-twilio](https://github.com/mautrix/twilio) bridge
 
 4. Create a configuration file:
 
-    - **For Beeper users** (using [bbctl](https://github.com/beeper/bridge-manager)):
+   - **For Beeper users** (using [bbctl](https://github.com/beeper/bridge-manager)):
 
-    ```bash
-    bbctl c --type bridgev2 sh-line > data/config.yaml
-    bbctl r sh-line > data/registration.yaml
-    ```
+     ```bash
+     bbctl c --type bridgev2 sh-line > data/config.yaml
+     bbctl r sh-line > data/registration.yaml
+     ```
 
-> [!IMPORTANT]
-> The `bbctl r` step is required as it writes the registration tokens
-> that Beeper's homeserver expects.
->
-> If you re-run `bbctl c` later (for example to reset your config),
-> re-sync tokens before starting the bridge:
+     > [!IMPORTANT]
+     > The `bbctl r` step is required as it writes the registration tokens
+     > that Beeper's homeserver expects.
+     >
+     > If you re-run `bbctl c` later (for example to reset your config),
+     > re-sync tokens before starting the bridge:
 
-```bash
-AS_TOKEN=$(grep '^as_token:' data/registration.yaml | awk '{print $2}')
-HS_TOKEN=$(grep '^hs_token:' data/registration.yaml | awk '{print $2}')
-sed -i "s|^[[:space:]]*as_token:.*|    as_token: ${AS_TOKEN}|" data/config.yaml
-sed -i "s|^[[:space:]]*hs_token:.*|    hs_token: ${HS_TOKEN}|" data/config.yaml
-```
+     ```bash
+     AS_TOKEN=$(grep '^as_token:' data/registration.yaml | awk '{print $2}')
+     HS_TOKEN=$(grep '^hs_token:' data/registration.yaml | awk '{print $2}')
+     sed -i "s|^[[:space:]]*as_token:.*|    as_token: ${AS_TOKEN}|" data/config.yaml
+     sed -i "s|^[[:space:]]*hs_token:.*|    hs_token: ${HS_TOKEN}|" data/config.yaml
+     ```
 
-    - **For self-hosted Matrix servers** (Synapse, Conduit, etc.):
+   - **For self-hosted Matrix servers** (Synapse, Conduit, etc.):
 
-    First, build the bridge binary (see step 5), then generate the
-    example config and registration:
+     First, build the bridge binary (see step 5), then generate the
+     example config and registration:
 
-    ```bash
-    # Generate example config
-    ./matrix-line -e -c data/config.yaml
+     ```bash
+     # Generate example config
+     ./matrix-line -e -c data/config.yaml
 
-    # Edit data/config.yaml and set:
-    #   homeserver.address: http://localhost:8008  (your Matrix server URL)
-    #   homeserver.domain: your.domain.com         (your Matrix server domain)
-    #   appservice.database.uri: sqlite:///data/matrix-line.db  (or a postgres URI)
+     # Edit data/config.yaml and set:
+     #   homeserver.address: http://localhost:8008  (your Matrix server URL)
+     #   homeserver.domain: your.domain.com         (your Matrix server domain)
+     #   appservice.database.uri: sqlite:///data/matrix-line.db
+     #   (or a postgres URI)
 
-    # Generate appservice registration
-    ./matrix-line -g -c data/config.yaml -r data/registration.yaml
-    ```
+     # Generate appservice registration
+     ./matrix-line -g -c data/config.yaml -r data/registration.yaml
+     ```
 
-    Then register the appservice with your homeserver by adding the
-    registration file path to your homeserver config. For Synapse, add it
-    to `app_service_config_files` in `homeserver.yaml`, then restart the
-    homeserver.
+     Then register the appservice with your homeserver by adding the
+     registration file path to your homeserver config. For Synapse, add it
+     to `app_service_config_files` in `homeserver.yaml`, then restart the
+     homeserver.
 
 5. Build and run the bridge using Docker (use -d for detached mode):
 
-    - **Using Docker Compose:**
+   - **Using Docker Compose:**
 
-    ```bash
-    docker compose up --build -d
-    ```
+     ```bash
+     docker compose up --build -d
+     ```
 
-    To run the bridge without rebuilding, use:
+     To run the bridge without rebuilding, use:
 
-    ```bash
-    docker compose up -d
-    ```
+     ```bash
+     docker compose up -d
+     ```
 
-    - **Building and running without Docker on Windows** (MSYS2 and
-      `x86_64-w64-mingw32-gcc` required)
+   - **Building and running without Docker on Windows** (MSYS2 and
+     `x86_64-w64-mingw32-gcc` required)
 
-    ```bash
-    # Clone and build olm if not already done
-    git clone https://gitlab.matrix.org/matrix-org/olm.git
-    cd olm
-    cmake -Bbuild -G "Unix Makefiles" \
-      -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-      -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
-      -DCMAKE_INSTALL_PREFIX=/mingw64
-    cmake --build build
-    cmake --install build
-    cd ..
-    # Move the .dll and .dll.a files in the matrix-line root directory
+     ```bash
+     # Clone and build olm if not already done
+     git clone https://gitlab.matrix.org/matrix-org/olm.git
+     cd olm
+     cmake -Bbuild -G "Unix Makefiles" \
+       -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+       -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+       -DCMAKE_INSTALL_PREFIX=/mingw64
+     cmake --build build
+     cmake --install build
+     cd ..
+     # Move the .dll and .dll.a files in the matrix-line root directory
 
-    # Build the bridge.
-    # Make sure the olm .dll file(s) are in the root of the project.
-    ./build-windows.sh
-    cd data
-    ../matrix-line.exe
-    ```
+     # Build the bridge.
+     # Make sure the olm .dll file(s) are in the root of the project.
+     ./build-windows.sh
+     cd data
+     ../matrix-line.exe
+     ```
 
-    - **Other systems:**
+   - **Other systems:**
 
-    ```bash
-    ./build.sh
-    cd data
-    ../matrix-line
-    ```
+     ```bash
+     ./build.sh
+     cd data
+     ../matrix-line
+     ```
 
 ## Login
 
