@@ -78,6 +78,30 @@ func (lc *LineClient) isLoggedOut(err error) bool {
 		strings.Contains(msg, "\"code\":10051")
 }
 
+func (lc *LineClient) nextReqSeq() int {
+	reqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
+
+	lc.reqSeqMu.Lock()
+	defer lc.reqSeqMu.Unlock()
+
+	if lc.sentReqSeqs == nil {
+		lc.sentReqSeqs = make(map[int]time.Time)
+	}
+	for {
+		if _, exists := lc.sentReqSeqs[reqSeq]; !exists {
+			lc.sentReqSeqs[reqSeq] = time.Now()
+			return reqSeq
+		}
+		reqSeq = (reqSeq + 1) % 1_000_000_000
+	}
+}
+
+func (lc *LineClient) releaseReqSeq(reqSeq int) {
+	lc.reqSeqMu.Lock()
+	delete(lc.sentReqSeqs, reqSeq)
+	lc.reqSeqMu.Unlock()
+}
+
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
 // Returns nil on success. On failure the caller should send StateBadCredentials.
 func (lc *LineClient) recoverToken(ctx context.Context) error {

@@ -28,8 +28,8 @@ import (
 )
 
 func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
-	if lc.E2EE == nil {
-		return nil, fmt.Errorf("E2EE not initialized; cannot send")
+	if msg.Content.MsgType != event.MsgText && lc.E2EE == nil {
+		return nil, fmt.Errorf("E2EE not initialized; cannot send %s", msg.Content.MsgType)
 	}
 
 	client := line.NewClient(lc.AccessToken)
@@ -330,42 +330,6 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	lowerPortalID := strings.ToLower(portalMid)
 	isGroup := strings.HasPrefix(lowerPortalID, "c") || strings.HasPrefix(lowerPortalID, "r")
 
-	if isGroup {
-		if errFetch := lc.fetchAndUnwrapGroupKey(ctx, portalMid, 0); errFetch != nil {
-			lc.UserLogin.Bridge.Log.Debug().Err(errFetch).Str("chat_mid", portalMid).Msg("fetchAndUnwrapGroupKey before encrypt failed")
-		}
-		if contentType != int(ContentText) {
-			chunks, err = lc.E2EE.EncryptGroupMessageRaw(portalMid, fromMid, contentType, payload)
-		} else {
-			chunks, err = lc.E2EE.EncryptGroupMessage(portalMid, fromMid, msg.Content.Body)
-		}
-		if err != nil {
-			if errFetch := lc.fetchAndUnwrapGroupKey(ctx, portalMid, 0); errFetch == nil {
-				if contentType != int(ContentText) {
-					chunks, err = lc.E2EE.EncryptGroupMessageRaw(portalMid, fromMid, contentType, payload)
-				} else {
-					chunks, err = lc.E2EE.EncryptGroupMessage(portalMid, fromMid, msg.Content.Body)
-				}
-			}
-		}
-	} else {
-		// 1-1 Encryption
-		myRaw, myKeyID, errKey := lc.E2EE.MyKeyIDs()
-		if errKey != nil {
-			return nil, fmt.Errorf("missing own E2EE key: %w", errKey)
-		}
-		peerRaw, peerPub, errPeer := lc.ensurePeerKey(ctx, portalMid)
-		if errPeer != nil {
-			return nil, fmt.Errorf("failed to get peer key: %w", errPeer)
-		}
-
-		chunks, err = lc.E2EE.EncryptMessageV2Raw(portalMid, fromMid, myKeyID, peerPub, myRaw, peerRaw, contentType, payload)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("encrypt failed: %w", err)
-	}
-
 	now := time.Now().UnixMilli()
 	lineMsg := &line.Message{
 		ID:              fmt.Sprintf("local-%d", now),
@@ -400,52 +364,119 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		lineMsg.RelatedMessageServiceCode = 1
 	}
 
-	reqSeq := int(now % 1_000_000_000)
-	lc.reqSeqMu.Lock()
-	if lc.sentReqSeqs == nil {
-		lc.sentReqSeqs = make(map[int]time.Time)
-	}
-	lc.sentReqSeqs[reqSeq] = time.Now()
-	lc.reqSeqMu.Unlock()
+	if msg.Content.MsgType == event.MsgText {
+		plainMsg := *lineMsg
+		plainMsg.ContentMetadata = map[string]string{}
+		plainMsg.Chunks = nil
+		plainMsg.Text = msg.Content.Body
 
+		reqSeq := lc.nextReqSeq()
+		sentMsg, err := client.SendMessage(int64(reqSeq), &plainMsg)
+		if err == nil {
+			return newMatrixMessageResponse(sentMsg, now, lc.UserLogin.ID), nil
+		}
+		lc.releaseReqSeq(reqSeq)
+
+		if !shouldRetryEncryptedTextSend(err) {
+			return nil, err
+		}
+		if lc.E2EE == nil {
+			return nil, fmt.Errorf("E2EE not initialized; cannot retry encrypted text send")
+		}
+		lc.UserLogin.Bridge.Log.Debug().
+			Err(err).
+			Str("chat_mid", portalMid).
+			Msg("Plain text send requested E2EE retry")
+	}
+
+	if isGroup {
+		if errFetch := lc.fetchAndUnwrapGroupKey(ctx, portalMid, 0); errFetch != nil {
+			lc.UserLogin.Bridge.Log.Debug().Err(errFetch).Str("chat_mid", portalMid).Msg("fetchAndUnwrapGroupKey before encrypt failed")
+		}
+		if contentType != int(ContentText) {
+			chunks, err = lc.E2EE.EncryptGroupMessageRaw(portalMid, fromMid, contentType, payload)
+		} else {
+			chunks, err = lc.E2EE.EncryptGroupMessage(portalMid, fromMid, msg.Content.Body)
+		}
+		if err != nil {
+			if errFetch := lc.fetchAndUnwrapGroupKey(ctx, portalMid, 0); errFetch == nil {
+				if contentType != int(ContentText) {
+					chunks, err = lc.E2EE.EncryptGroupMessageRaw(portalMid, fromMid, contentType, payload)
+				} else {
+					chunks, err = lc.E2EE.EncryptGroupMessage(portalMid, fromMid, msg.Content.Body)
+				}
+			}
+		}
+	} else {
+		myRaw, myKeyID, errKey := lc.E2EE.MyKeyIDs()
+		if errKey != nil {
+			return nil, fmt.Errorf("missing own E2EE key: %w", errKey)
+		}
+		peerRaw, peerPub, errPeer := lc.ensurePeerKey(ctx, portalMid)
+		if errPeer != nil {
+			return nil, fmt.Errorf("failed to get peer key: %w", errPeer)
+		}
+
+		chunks, err = lc.E2EE.EncryptMessageV2Raw(portalMid, fromMid, myKeyID, peerPub, myRaw, peerRaw, contentType, payload)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("encrypt failed: %w", err)
+	}
+
+	lineMsg.Text = ""
+	lineMsg.Chunks = chunks
+
+	reqSeq := lc.nextReqSeq()
 	sentMsg, err := client.SendMessage(int64(reqSeq), lineMsg)
 	if err != nil {
+		lc.releaseReqSeq(reqSeq)
 		return nil, err
 	}
 
-	return &bridgev2.MatrixMessageResponse{
-		DB: &database.Message{
-			ID:        networkid.MessageID(sentMsg.ID),
-			SenderID:  makeUserID(string(lc.UserLogin.ID)),
-			Timestamp: time.UnixMilli(now),
-		},
-	}, nil
+	return newMatrixMessageResponse(sentMsg, now, lc.UserLogin.ID), nil
 }
 
 func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
 	client := line.NewClient(lc.AccessToken)
 
-	reqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
-	lc.reqSeqMu.Lock()
-	if lc.sentReqSeqs == nil {
-		lc.sentReqSeqs = make(map[int]time.Time)
+	reqSeq := lc.nextReqSeq()
+	err := client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	if err != nil {
+		lc.releaseReqSeq(reqSeq)
 	}
-	lc.sentReqSeqs[reqSeq] = time.Now()
-	lc.reqSeqMu.Unlock()
-
-	return client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	return err
 }
 
 func (lc *LineClient) HandleMatrixLeaveRoom(ctx context.Context, portal *bridgev2.Portal) error {
 	client := line.NewClient(lc.AccessToken)
 
-	reqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
-	lc.reqSeqMu.Lock()
-	if lc.sentReqSeqs == nil {
-		lc.sentReqSeqs = make(map[int]time.Time)
+	reqSeq := lc.nextReqSeq()
+	err := client.SendChatRemoved(int64(reqSeq), string(portal.ID), "0", 0)
+	if err != nil {
+		lc.releaseReqSeq(reqSeq)
 	}
-	lc.sentReqSeqs[reqSeq] = time.Now()
-	lc.reqSeqMu.Unlock()
+	return err
+}
 
-	return client.SendChatRemoved(int64(reqSeq), string(portal.ID), "0", 0)
+func newMatrixMessageResponse(sentMsg *line.Message, fallbackMillis int64, sender networkid.UserLoginID) *bridgev2.MatrixMessageResponse {
+	return &bridgev2.MatrixMessageResponse{
+		DB: &database.Message{
+			ID:        networkid.MessageID(sentMsg.ID),
+			SenderID:  makeUserID(string(sender)),
+			Timestamp: time.UnixMilli(fallbackMillis),
+		},
+	}
+}
+
+func shouldRetryEncryptedTextSend(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "\"code\":82") ||
+		strings.Contains(msg, "\"code\":99") ||
+		strings.Contains(msg, "E2EE_RETRY_ENCRYPT") ||
+		strings.Contains(msg, "E2EE_RECREATE_GROUP_KEY")
 }
