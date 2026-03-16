@@ -170,7 +170,7 @@ func (c *Client) WaitForLogin(verifier string) (*LoginResult, error) {
 		}, nil
 	}
 
-	return nil, fmt.Errorf("polling returned without success")
+	return nil, fmt.Errorf("%w: polling returned without success", ErrLetterSealingRequired)
 }
 
 func (c *Client) GetRSAKeyInfo() (*RSAKeyInfo, error) {

@@ -10,6 +10,7 @@ import (
 var (
 	ErrNoUsableE2EEPublicKey = errors.New("no usable E2EE public key")
 	ErrNoUsableE2EEGroupKey  = errors.New("no usable E2EE group key")
+	ErrLetterSealingRequired = errors.New("letter sealing must be enabled")
 )
 
 type talkExceptionData struct {
@@ -106,4 +107,20 @@ func IsNoUsableE2EEGroupKey(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no group key found") ||
 		strings.Contains(msg, "no group shared key returned")
+}
+
+func IsLetterSealingRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrLetterSealingRequired) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "polling returned without success") ||
+		(strings.Contains(msg, "api error 400") &&
+			strings.Contains(msg, "\"code\":10051") &&
+			strings.Contains(msg, "\"name\":\"talkexception\"") &&
+			strings.Contains(msg, "\"code\":20") &&
+			strings.Contains(msg, "\"reason\":\"internal error\""))
 }

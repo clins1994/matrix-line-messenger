@@ -166,6 +166,10 @@ func (ll *LineEmailLogin) SubmitUserInput(ctx context.Context, input map[string]
 	client := line.NewClient("")
 	res, err := client.Login(ll.Email, ll.Password, "")
 	if err != nil {
+		if line.IsLetterSealingRequired(err) {
+			return ll.loginErrorStep(letterSealingRequiredLoginMessage()), nil
+		}
+		ll.User.Log.Warn().Err(err).Msg("LINE login failed during interactive login")
 		reason := loginErrorReason(err)
 		if reason == "" {
 			reason = fmt.Sprintf("Login failed: %v", err)
@@ -174,6 +178,17 @@ func (ll *LineEmailLogin) SubmitUserInput(ctx context.Context, input map[string]
 	}
 
 	return ll.handleLoginResponse(ctx, res)
+}
+
+func letterSealingRequiredLoginMessage() string {
+	return "This LINE account can't log in to the bridge until Letter Sealing is enabled in the LINE app. Enable it in LINE -> Settings -> Privacy -> Letter Sealing, then try again. For more info check [github](https://github.com/highesttt/matrix-line-messenger?tab=readme-ov-file#2-letter-sealing-end-to-end-encryption-is-disabled)."
+}
+
+func isLetterSealingLoginFailure(res *line.LoginResult) bool {
+	if res == nil || res.AuthToken != "" || res.Verifier != "" {
+		return false
+	}
+	return res.Pin != "" || res.PinCode != ""
 }
 
 func (ll *LineEmailLogin) loginErrorStep(message string) *bridgev2.LoginStep {
@@ -227,8 +242,11 @@ func (ll *LineEmailLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error)
 			if res.AuthToken != "" {
 				return ll.finishLogin(ctx, res)
 			}
-			return nil, fmt.Errorf("verification failed: no auth token received")
+			return ll.loginErrorStep(letterSealingRequiredLoginMessage()), nil
 		case err := <-ll.pollErr:
+			if line.IsLetterSealingRequired(err) {
+				return ll.loginErrorStep(letterSealingRequiredLoginMessage()), nil
+			}
 			return nil, fmt.Errorf("verification failed: %w", err)
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -239,6 +257,10 @@ func (ll *LineEmailLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error)
 		client := line.NewClient("")
 		res, err := client.Login(ll.Email, ll.Password, "")
 		if err != nil {
+			if line.IsLetterSealingRequired(err) {
+				return ll.loginErrorStep(letterSealingRequiredLoginMessage()), nil
+			}
+			ll.User.Log.Warn().Err(err).Msg("LINE login continuation failed during interactive login")
 			return nil, fmt.Errorf("login failed: %w", err)
 		}
 		return ll.handleLoginResponse(ctx, res)
@@ -250,6 +272,10 @@ func (ll *LineEmailLogin) Wait(ctx context.Context) (*bridgev2.LoginStep, error)
 func (ll *LineEmailLogin) handleLoginResponse(ctx context.Context, res *line.LoginResult) (*bridgev2.LoginStep, error) {
 	if res.AuthToken != "" {
 		return ll.finishLogin(ctx, res)
+	}
+
+	if isLetterSealingLoginFailure(res) {
+		return ll.loginErrorStep(letterSealingRequiredLoginMessage()), nil
 	}
 
 	if (res.Type == 3 || res.Type == 0) && res.Verifier != "" {
