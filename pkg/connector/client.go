@@ -187,12 +187,19 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 	client := line.NewClient("")
 	res, err := client.Login(email, password, certificate)
 	if err != nil {
+		if line.IsLetterSealingRequired(err) {
+			return fmt.Errorf("%w: %s", line.ErrLetterSealingRequired, letterSealingRequiredLoginMessage())
+		}
+		lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Stored-credential LINE login failed")
 		return fmt.Errorf("login failed: %w", err)
 	}
 	if res.AuthToken == "" {
 		pin := res.Pin
 		if res.PinCode != "" {
 			pin = res.PinCode
+		}
+		if isLetterSealingLoginFailure(res) {
+			return fmt.Errorf("%w: %s", line.ErrLetterSealingRequired, letterSealingRequiredLoginMessage())
 		}
 		if pin != "" {
 			lc.UserLogin.Bridge.Log.Warn().Msg("PIN verification required — check your LINE mobile app to complete re-login")
@@ -211,10 +218,13 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		waitClient := line.NewClient("")
 		waitRes, err := waitClient.WaitForLogin(res.Verifier)
 		if err != nil {
+			if line.IsLetterSealingRequired(err) {
+				return fmt.Errorf("%w: %s", line.ErrLetterSealingRequired, letterSealingRequiredLoginMessage())
+			}
 			return fmt.Errorf("PIN verification failed: %w", err)
 		}
 		if waitRes.AuthToken == "" {
-			return fmt.Errorf("PIN verification completed but no auth token received")
+			return fmt.Errorf("%w: %s", line.ErrLetterSealingRequired, letterSealingRequiredLoginMessage())
 		}
 		// Replace res with the verified result
 		res = waitRes

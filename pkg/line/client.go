@@ -62,6 +62,9 @@ func (c *Client) Login(email, pass, certificate string) (*LoginResult, error) {
 		respBytes, err = c.LoginV2WithType(0, rsaKey.KeyName, encryptedPass, "", "")
 	}
 	if err != nil {
+		if isLetterSealingLoginAPIError(err) {
+			return nil, fmt.Errorf("%w: %v", ErrLetterSealingRequired, err)
+		}
 		return nil, fmt.Errorf("login failed: %w", err)
 	}
 
@@ -170,7 +173,7 @@ func (c *Client) WaitForLogin(verifier string) (*LoginResult, error) {
 		}, nil
 	}
 
-	return nil, fmt.Errorf("polling returned without success")
+	return nil, fmt.Errorf("%w: polling returned without success", ErrLetterSealingRequired)
 }
 
 func (c *Client) GetRSAKeyInfo() (*RSAKeyInfo, error) {
