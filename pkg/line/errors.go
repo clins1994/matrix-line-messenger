@@ -3,11 +3,15 @@ package line
 import (
 	"encoding/json"
 	"errors"
-	"strconv"
+	"fmt"
 	"strings"
 )
 
-var ErrLetterSealingRequired = errors.New("letter sealing must be enabled")
+var (
+	ErrNoUsableE2EEPublicKey = errors.New("no usable E2EE public key")
+	ErrNoUsableE2EEGroupKey  = errors.New("no usable E2EE group key")
+	ErrLetterSealingRequired = errors.New("letter sealing must be enabled")
+)
 
 type talkExceptionData struct {
 	Name    string `json:"name"`
@@ -16,41 +20,28 @@ type talkExceptionData struct {
 	Reason  string `json:"reason"`
 }
 
-func parseTalkExceptionData(raw json.RawMessage) talkExceptionData {
-	var data talkExceptionData
-	_ = json.Unmarshal(raw, &data)
-	return data
+type apiError struct {
+	HTTPStatus int
+	Code       int
+	Message    string
+	Talk       talkExceptionData
+	RawBody    string
+
+	kind error
 }
 
-func parseHTTPAPIError(err error) (int, json.RawMessage, bool) {
-	if err == nil {
-		return 0, nil, false
-	}
-
-	msg := err.Error()
-	idx := strings.Index(msg, "API error ")
-	if idx == -1 {
-		return 0, nil, false
-	}
-
-	rest := msg[idx+len("API error "):]
-	statusText, bodyText, ok := strings.Cut(rest, ": ")
-	if !ok {
-		return 0, nil, false
-	}
-
-	status, convErr := strconv.Atoi(statusText)
-	if convErr != nil {
-		return 0, nil, false
-	}
-
-	return status, json.RawMessage(bodyText), true
+func (e *apiError) Error() string {
+	return fmt.Sprintf("API error %d: %s", e.HTTPStatus, e.RawBody)
 }
 
-func isLetterSealingLoginAPIError(err error) bool {
-	status, body, ok := parseHTTPAPIError(err)
-	if !ok || status != 400 {
-		return false
+func (e *apiError) Unwrap() error {
+	return e.kind
+}
+
+func parseAPIError(status int, body []byte) error {
+	apiErr := &apiError{
+		HTTPStatus: status,
+		RawBody:    string(body),
 	}
 
 	var wrapper struct {
@@ -58,21 +49,87 @@ func isLetterSealingLoginAPIError(err error) bool {
 		Message string          `json:"message"`
 		Data    json.RawMessage `json:"data"`
 	}
-	if jsonErr := json.Unmarshal(body, &wrapper); jsonErr != nil {
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		return apiErr
+	}
+
+	apiErr.Code = wrapper.Code
+	apiErr.Message = wrapper.Message
+	apiErr.Talk = parseTalkExceptionData(wrapper.Data)
+	if isNoUsableE2EEGroupKeyTalkException(wrapper.Message, apiErr.Talk) {
+		apiErr.kind = ErrNoUsableE2EEGroupKey
+	}
+
+	return apiErr
+}
+
+func parseTalkExceptionData(raw json.RawMessage) talkExceptionData {
+	var data talkExceptionData
+	_ = json.Unmarshal(raw, &data)
+	return data
+}
+
+func isNoUsableE2EEGroupKeyTalkException(message string, data talkExceptionData) bool {
+	return strings.EqualFold(message, "RESPONSE_ERROR") &&
+		strings.EqualFold(data.Name, "TalkException") &&
+		data.Code == 5 &&
+		strings.EqualFold(data.Reason, "not found")
+}
+
+func parseE2EEGroupKeyError(method, message string, rawData json.RawMessage) error {
+	talk := parseTalkExceptionData(rawData)
+	if isNoUsableE2EEGroupKeyTalkException(message, talk) {
+		return fmt.Errorf("%w: %s", ErrNoUsableE2EEGroupKey, talk.Reason)
+	}
+	return fmt.Errorf("%s failed: %s", method, message)
+}
+
+func IsNoUsableE2EEPublicKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNoUsableE2EEPublicKey) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "missing fields (pub=false keyID=-1") ||
+		strings.Contains(msg, "missing fields (pub=false keyID=0") ||
+		strings.Contains(msg, "\"allowedTypes\":[]") && strings.Contains(msg, "\"specVersion\":-1")
+}
+
+func IsNoUsableE2EEGroupKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNoUsableE2EEGroupKey) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no group key found") ||
+		strings.Contains(msg, "no group shared key returned")
+}
+
+func isLetterSealingLoginAPIError(err error) bool {
+	if err == nil {
 		return false
 	}
 
-	talk := parseTalkExceptionData(wrapper.Data)
-	return wrapper.Code == 10051 &&
-		strings.EqualFold(wrapper.Message, "RESPONSE_ERROR") &&
-		strings.EqualFold(talk.Name, "TalkException") &&
-		talk.Code == 20 &&
-		strings.EqualFold(talk.Reason, "internal error")
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	return apiErr.HTTPStatus == 400 &&
+		apiErr.Code == 10051 &&
+		strings.EqualFold(apiErr.Message, "RESPONSE_ERROR") &&
+		strings.EqualFold(apiErr.Talk.Name, "TalkException") &&
+		apiErr.Talk.Code == 20 &&
+		strings.EqualFold(apiErr.Talk.Reason, "internal error")
 }
 
 func IsLetterSealingRequired(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, ErrLetterSealingRequired) || isLetterSealingLoginAPIError(err)
+	return errors.Is(err, ErrLetterSealingRequired)
 }
