@@ -66,7 +66,6 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	var originalMediaData []byte
 	var originalThumbData []byte
 
-
 	switch msg.Content.MsgType {
 	case event.MsgText:
 		contentType = int(ContentText)
@@ -94,11 +93,6 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 			extension = "gif"
 		} else if mimeType == "image/png" {
 			extension = "png"
-		}
-
-		// Flatten transparent PNGs onto white background (matches LINE native client)
-		if mimeType == "image/png" {
-			data = flattenPNGTransparency(data)
 		}
 
 		contentType = int(ContentImage)
