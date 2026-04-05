@@ -334,12 +334,6 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 			lc.UserLogin.Bridge.Log.Warn().
 				Bool("has_stored_certificate", certificate != "").
 				Msg("PIN verification required despite stored credentials — certificate may be expired")
-			// Send the PIN via bridge state so the user sees it in their Matrix client
-			lc.UserLogin.BridgeState.Send(status.BridgeState{
-				StateEvent: status.StateConnecting,
-				Error:      "line-pin-required",
-				Message:    fmt.Sprintf("Enter this PIN on your LINE mobile app: %s", pin),
-			})
 		}
 		if res.Verifier == "" {
 			return fmt.Errorf("login requires interaction but no verifier returned")
