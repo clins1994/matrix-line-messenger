@@ -269,22 +269,39 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		return fmt.Errorf("no stored credentials available for re-login")
 	}
 
+	certPreview := ""
+	if len(certificate) > 10 {
+		certPreview = certificate[:10] + "..."
+	}
 	lc.UserLogin.Bridge.Log.Info().
 		Str("email", email).
 		Bool("has_certificate", certificate != "").
+		Int("cert_len", len(certificate)).
+		Str("cert_preview", certPreview).
 		Msg("Attempting to login with email/password...")
 	client := line.NewClient("")
 	res, err := client.Login(email, password, certificate)
 	if err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
+
+	lc.UserLogin.Bridge.Log.Info().
+		Bool("has_auth_token", res.AuthToken != "").
+		Bool("has_certificate", res.Certificate != "").
+		Bool("has_pin", res.Pin != "" || res.PinCode != "").
+		Bool("has_verifier", res.Verifier != "").
+		Bool("no_e2ee", res.NoE2EE).
+		Msg("Login response received")
+
 	if res.AuthToken == "" {
 		pin := res.Pin
 		if res.PinCode != "" {
 			pin = res.PinCode
 		}
 		if pin != "" {
-			lc.UserLogin.Bridge.Log.Warn().Msg("PIN verification required — check your LINE mobile app to complete re-login")
+			lc.UserLogin.Bridge.Log.Warn().
+				Bool("has_stored_certificate", certificate != "").
+				Msg("PIN verification required despite stored credentials — certificate may be expired")
 			// Send the PIN via bridge state so the user sees it in their Matrix client
 			lc.UserLogin.BridgeState.Send(status.BridgeState{
 				StateEvent: status.StateConnecting,
@@ -335,14 +352,22 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		meta.AccessToken = lc.AccessToken
 		meta.RefreshToken = lc.RefreshToken
 		if res.Certificate != "" {
+			oldCert := meta.Certificate
 			meta.Certificate = res.Certificate
+			lc.UserLogin.Bridge.Log.Info().
+				Bool("cert_changed", oldCert != res.Certificate).
+				Bool("had_old_cert", oldCert != "").
+				Msg("Saved certificate from login result")
 		}
 		if err := lc.UserLogin.Save(ctx); err != nil {
 			lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to save new tokens to DB")
 		}
 	}
 
-	lc.UserLogin.Bridge.Log.Info().Msg("Login successful!")
+	lc.UserLogin.Bridge.Log.Info().
+		Bool("has_certificate", res.Certificate != "").
+		Bool("no_e2ee", res.NoE2EE).
+		Msg("Login successful!")
 	return nil
 }
 
