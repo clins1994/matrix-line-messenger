@@ -61,8 +61,11 @@ type LineClient struct {
 	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
 	contactCache map[string]cachedContact
 
-	refreshTimer           *time.Timer
+	refreshTimer            *time.Timer
 	durationUntilRefreshSec int64
+
+	recoverMu   sync.Mutex
+	recoverTime time.Time
 }
 
 type peerKeyInfo struct {
@@ -128,10 +131,21 @@ func (lc *LineClient) isLoggedOut(err error) bool {
 
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
 // Returns nil on success. On failure it sends StateBadCredentials automatically.
+// Concurrent callers are serialized; if recovery happened within the last 10 seconds
+// the call is a no-op (the token was already refreshed by another goroutine).
 func (lc *LineClient) recoverToken(ctx context.Context) error {
+	lc.recoverMu.Lock()
+	defer lc.recoverMu.Unlock()
+
+	if time.Since(lc.recoverTime) < 10*time.Second {
+		lc.UserLogin.Bridge.Log.Debug().Msg("Skipping token recovery — already recovered recently")
+		return nil
+	}
+
 	if err := lc.refreshAndSave(ctx); err == nil {
 		lc.UserLogin.Bridge.Log.Info().Msg("Token recovered via refresh")
 		lc.scheduleTokenRefresh()
+		lc.recoverTime = time.Now()
 		return nil
 	}
 	lc.UserLogin.Bridge.Log.Info().Msg("Refresh failed, attempting re-login with stored credentials...")
@@ -144,6 +158,7 @@ func (lc *LineClient) recoverToken(ctx context.Context) error {
 		return err
 	}
 	lc.scheduleTokenRefresh()
+	lc.recoverTime = time.Now()
 	return nil
 }
 
