@@ -37,10 +37,19 @@ func (lc *LineClient) isTokenError(err error) bool {
 func (lc *LineClient) callWithRecovery(ctx context.Context, fn func(*line.Client) error) (*line.Client, error) {
 	client := line.NewClient(lc.AccessToken)
 	err := fn(client)
-	if err != nil && lc.isTokenError(err) {
-		if errRecover := lc.recoverToken(ctx); errRecover == nil {
-			client = line.NewClient(lc.AccessToken)
-			err = fn(client)
+	if err != nil {
+		isToken := lc.isTokenError(err)
+		lc.UserLogin.Bridge.Log.Debug().
+			Err(err).
+			Bool("is_token_error", isToken).
+			Msg("callWithRecovery: API call failed")
+		if isToken {
+			if errRecover := lc.recoverToken(ctx); errRecover == nil {
+				client = line.NewClient(lc.AccessToken)
+				err = fn(client)
+			} else {
+				lc.UserLogin.Bridge.Log.Warn().Err(errRecover).Msg("callWithRecovery: recovery failed")
+			}
 		}
 	}
 	return client, err
