@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,14 @@ type LineClient struct {
 
 	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
 	contactCache map[string]cachedContact
+
+	dataMu sync.RWMutex // protects peerKeys, contactCache, noE2EEGroups
+
+	refreshTimer            *time.Timer
+	durationUntilRefreshSec int64
+
+	recoverMu   sync.Mutex
+	recoverTime time.Time
 }
 
 type peerKeyInfo struct {
@@ -93,6 +102,17 @@ func (lc *LineClient) refreshAndSave(ctx context.Context) error {
 	if res.RefreshToken != "" {
 		lc.RefreshToken = res.RefreshToken
 	}
+	if res.DurationUntilRefreshSec != "" {
+		if d, err := strconv.ParseInt(res.DurationUntilRefreshSec, 10, 64); err == nil {
+			lc.durationUntilRefreshSec = d
+		}
+	}
+
+	// Validate the new token with a lightweight API call before persisting it
+	validationClient := line.NewClient(lc.AccessToken)
+	if _, err := validationClient.GetProfile(); err != nil {
+		return fmt.Errorf("refreshed token failed validation: %w", err)
+	}
 
 	meta := lc.UserLogin.Metadata.(*UserLoginMetadata)
 	meta.AccessToken = lc.AccessToken
@@ -118,17 +138,39 @@ func (lc *LineClient) isLoggedOut(err error) bool {
 }
 
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
-// Returns nil on success. On failure the caller should send StateBadCredentials.
+// Returns nil on success. On failure it sends StateBadCredentials automatically.
+// Concurrent callers are serialized; if recovery happened within the last 10 seconds
+// the call is a no-op (the token was already refreshed by another goroutine).
 func (lc *LineClient) recoverToken(ctx context.Context) error {
+	lc.recoverMu.Lock()
+	defer lc.recoverMu.Unlock()
+
+	if time.Since(lc.recoverTime) < 10*time.Second {
+		lc.UserLogin.Bridge.Log.Debug().Msg("Skipping token recovery — already recovered recently")
+		return nil
+	}
+
 	if err := lc.refreshAndSave(ctx); err == nil {
 		lc.UserLogin.Bridge.Log.Info().Msg("Token recovered via refresh")
+		lc.scheduleTokenRefresh()
+		lc.recoverTime = time.Now()
 		return nil
 	}
 	lc.UserLogin.Bridge.Log.Info().Msg("Refresh failed, attempting re-login with stored credentials...")
-	return lc.tryLogin(ctx)
+	if err := lc.tryLogin(ctx); err != nil {
+		lc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Message:    fmt.Sprintf("Token recovery failed: %v", err),
+		})
+		return err
+	}
+	lc.scheduleTokenRefresh()
+	lc.recoverTime = time.Now()
+	return nil
 }
 
 func (lc *LineClient) Connect(ctx context.Context) {
+	lc.dataMu.Lock()
 	if lc.peerKeys == nil {
 		lc.peerKeys = make(map[string]peerKeyInfo)
 	}
@@ -138,6 +180,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 	if lc.noE2EEGroups == nil {
 		lc.noE2EEGroups = make(map[string]time.Time)
 	}
+	lc.dataMu.Unlock()
 	lc.reqSeqMu.Lock()
 	if lc.sentReqSeqs == nil {
 		lc.sentReqSeqs = make(map[int]time.Time)
@@ -153,7 +196,6 @@ func (lc *LineClient) Connect(ctx context.Context) {
 		if err := lc.tryLogin(ctx); err != nil {
 			lc.UserLogin.BridgeState.Send(status.BridgeState{
 				StateEvent: status.StateBadCredentials,
-				Error:      "line-login-failed",
 				Message:    err.Error(),
 			})
 			return
@@ -164,10 +206,19 @@ func (lc *LineClient) Connect(ctx context.Context) {
 	if err := lc.ensureValidToken(ctx); err != nil {
 		lc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
-			Error:      "line-token-expired",
 			Message:    fmt.Sprintf("session expired and could not be restored: %v", err),
 		})
 		return
+	}
+
+	lc.scheduleTokenRefresh()
+
+	// Update remote profile so bridge states include the user's name
+	if lc.UserLogin.RemoteProfile.Name == "" {
+		if profile, err := line.NewClient(lc.AccessToken).GetProfile(); err == nil {
+			lc.UserLogin.RemoteName = profile.DisplayName
+			lc.UserLogin.RemoteProfile = status.RemoteProfile{Name: profile.DisplayName}
+		}
 	}
 
 	lc.UserLogin.Bridge.Log.Info().Int("token_len", len(lc.AccessToken)).Msg("LINE client connected; notifying bridge")
@@ -232,19 +283,16 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
+
 	if res.AuthToken == "" {
 		pin := res.Pin
 		if res.PinCode != "" {
 			pin = res.PinCode
 		}
 		if pin != "" {
-			lc.UserLogin.Bridge.Log.Warn().Msg("PIN verification required — check your LINE mobile app to complete re-login")
-			// Send the PIN via bridge state so the user sees it in their Matrix client
-			lc.UserLogin.BridgeState.Send(status.BridgeState{
-				StateEvent: status.StateConnecting,
-				Error:      "line-pin-required",
-				Message:    fmt.Sprintf("Enter this PIN on your LINE mobile app: %s", pin),
-			})
+			lc.UserLogin.Bridge.Log.Warn().
+				Bool("has_stored_certificate", certificate != "").
+				Msg("PIN verification required despite stored credentials — certificate may be expired")
 		}
 		if res.Verifier == "" {
 			return fmt.Errorf("login requires interaction but no verifier returned")
@@ -271,6 +319,11 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		if res.TokenV3IssueResult.RefreshToken != "" {
 			lc.RefreshToken = res.TokenV3IssueResult.RefreshToken
 		}
+		if res.TokenV3IssueResult.DurationUntilRefreshSec != "" {
+			if d, err := strconv.ParseInt(res.TokenV3IssueResult.DurationUntilRefreshSec, 10, 64); err == nil {
+				lc.durationUntilRefreshSec = d
+			}
+		}
 	}
 	if res.Mid != "" {
 		lc.Mid = res.Mid
@@ -284,14 +337,22 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		meta.AccessToken = lc.AccessToken
 		meta.RefreshToken = lc.RefreshToken
 		if res.Certificate != "" {
+			oldCert := meta.Certificate
 			meta.Certificate = res.Certificate
+			lc.UserLogin.Bridge.Log.Info().
+				Bool("cert_changed", oldCert != res.Certificate).
+				Bool("had_old_cert", oldCert != "").
+				Msg("Saved certificate from login result")
 		}
 		if err := lc.UserLogin.Save(ctx); err != nil {
 			lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to save new tokens to DB")
 		}
 	}
 
-	lc.UserLogin.Bridge.Log.Info().Msg("Login successful!")
+	lc.UserLogin.Bridge.Log.Info().
+		Bool("has_certificate", res.Certificate != "").
+		Bool("no_e2ee", res.NoE2EE).
+		Msg("Login successful!")
 	return nil
 }
 
@@ -324,7 +385,37 @@ func (lc *LineClient) ensureValidToken(ctx context.Context) error {
 	return lc.tryLogin(ctx)
 }
 
-func (lc *LineClient) Disconnect() {}
+// scheduleTokenRefresh sets a timer to proactively refresh the access token
+// before it expires. The timer fires 5 minutes before the server-reported
+// expiration so the bridge never operates with a stale token.
+func (lc *LineClient) scheduleTokenRefresh() {
+	if lc.durationUntilRefreshSec <= 0 {
+		return
+	}
+	const marginSec = 5 * 60
+	delaySec := lc.durationUntilRefreshSec - marginSec
+	if delaySec < 60 {
+		delaySec = 60
+	}
+	if lc.refreshTimer != nil {
+		lc.refreshTimer.Stop()
+	}
+	lc.refreshTimer = time.AfterFunc(time.Duration(delaySec)*time.Second, func() {
+		lc.UserLogin.Bridge.Log.Info().Int64("delay_sec", delaySec).Msg("Proactive token refresh triggered")
+		if err := lc.refreshAndSave(context.Background()); err != nil {
+			lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Proactive token refresh failed")
+			return
+		}
+		lc.scheduleTokenRefresh()
+	})
+	lc.UserLogin.Bridge.Log.Info().Int64("delay_sec", delaySec).Msg("Scheduled proactive token refresh")
+}
+
+func (lc *LineClient) Disconnect() {
+	if lc.refreshTimer != nil {
+		lc.refreshTimer.Stop()
+	}
+}
 
 func (lc *LineClient) IsLoggedIn() bool { return lc.AccessToken != "" }
 

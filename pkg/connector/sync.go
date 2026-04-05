@@ -271,6 +271,7 @@ func (lc *LineClient) chatToChatInfo(chat *line.Chat, excludeFromTimeline bool) 
 func (lc *LineClient) generateNameFromMembers(members map[string]bool) string {
 	var names []string
 	count := 0
+	lc.dataMu.RLock()
 	for mid := range members {
 		if mid == string(lc.UserLogin.ID) || mid == lc.Mid || strings.HasPrefix(mid, "c") || strings.HasPrefix(mid, "r") {
 			continue
@@ -283,6 +284,7 @@ func (lc *LineClient) generateNameFromMembers(members map[string]bool) string {
 			break
 		}
 	}
+	lc.dataMu.RUnlock()
 
 	finalNames := names
 	if len(names) > 3 {
@@ -383,7 +385,6 @@ func (lc *LineClient) pollLoop(ctx context.Context) {
 							lc.UserLogin.Bridge.Log.Error().Err(errRecover).Msg("Failed to recover session, stopping poll loop")
 							lc.UserLogin.BridgeState.Send(status.BridgeState{
 								StateEvent: status.StateBadCredentials,
-								Error:      "line-logged-out",
 								Message:    "LINE session was invalidated (logged out by another client). Please re-authenticate the bridge.",
 							})
 							return

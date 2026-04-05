@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,15 @@ type LineConnector struct {
 }
 
 var _ bridgev2.NetworkConnector = (*LineConnector)(nil)
+
+func init() {
+	status.BridgeStateHumanErrors.Update(status.BridgeStateErrorMap{
+		"line-recovery-failed": "Your LINE session expired and could not be restored. Please reconnect the bridge.",
+		"line-login-failed":    "LINE login failed. Please reconnect the bridge.",
+		"line-token-expired":   "Your LINE session expired. Please reconnect the bridge.",
+		"line-logged-out":      "You were logged out from LINE (another device logged in). Please reconnect the bridge.",
+	})
+}
 
 func (lc *LineConnector) Init(bridge *bridgev2.Bridge) {
 	lc.br = bridge
@@ -54,7 +64,7 @@ func (lc *LineConnector) GetName() bridgev2.BridgeName {
 		NetworkURL:       "https://line.me",
 		NetworkIcon:      "",
 		NetworkID:        "line",
-		BeeperBridgeType: "github.com/highesttt/matrix-line-messenger",
+		BeeperBridgeType: "line",
 		DefaultPort:      29322,
 	}
 }
@@ -76,27 +86,29 @@ func (lc *LineConnector) GetDBMetaTypes() database.MetaTypes {
 }
 
 type UserLoginMetadata struct {
-	AccessToken       string            `json:"access_token"`
-	RefreshToken      string            `json:"refresh_token,omitempty"`
-	Email             string            `json:"email,omitempty"`
-	Password          string            `json:"password,omitempty"`
-	Certificate       string            `json:"certificate,omitempty"`
-	Mid               string            `json:"mid,omitempty"`
-	EncryptedKeyChain string            `json:"encrypted_key_chain,omitempty"`
-	E2EEPublicKey     string            `json:"e2ee_public_key,omitempty"`
-	E2EEVersion       string            `json:"e2ee_version,omitempty"`
-	E2EEKeyID         string            `json:"e2ee_key_id,omitempty"`
-	ExportedKeyMap    map[string]string `json:"exported_key_map,omitempty"`
+	AccessToken             string            `json:"access_token"`
+	RefreshToken            string            `json:"refresh_token,omitempty"`
+	Email                   string            `json:"email,omitempty"`
+	Password                string            `json:"password,omitempty"`
+	Certificate             string            `json:"certificate,omitempty"`
+	Mid                     string            `json:"mid,omitempty"`
+	EncryptedKeyChain       string            `json:"encrypted_key_chain,omitempty"`
+	E2EEPublicKey           string            `json:"e2ee_public_key,omitempty"`
+	E2EEVersion             string            `json:"e2ee_version,omitempty"`
+	E2EEKeyID               string            `json:"e2ee_key_id,omitempty"`
+	ExportedKeyMap          map[string]string `json:"exported_key_map,omitempty"`
+	DurationUntilRefreshSec int64             `json:"duration_until_refresh_sec,omitempty"`
 }
 
 func (lc *LineConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
 	meta := login.Metadata.(*UserLoginMetadata)
 	login.Client = &LineClient{
-		UserLogin:    login,
-		AccessToken:  meta.AccessToken,
-		RefreshToken: meta.RefreshToken,
-		Mid:          meta.Mid,
-		HTTPClient:   &http.Client{Timeout: 10 * time.Second},
+		UserLogin:               login,
+		AccessToken:             meta.AccessToken,
+		RefreshToken:            meta.RefreshToken,
+		Mid:                     meta.Mid,
+		HTTPClient:              &http.Client{Timeout: 10 * time.Second},
+		durationUntilRefreshSec: meta.DurationUntilRefreshSec,
 	}
 	return nil
 }
@@ -338,6 +350,11 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 	}
 
 	meta := &UserLoginMetadata{AccessToken: token, RefreshToken: refreshToken, Email: ll.Email, Password: ll.Password, Certificate: res.Certificate, Mid: res.Mid}
+	if res.TokenV3IssueResult != nil && res.TokenV3IssueResult.DurationUntilRefreshSec != "" {
+		if d, err := strconv.ParseInt(res.TokenV3IssueResult.DurationUntilRefreshSec, 10, 64); err == nil {
+			meta.DurationUntilRefreshSec = d
+		}
+	}
 	if res.EncryptedKeyChain != "" && res.E2EEPublicKey != "" {
 		meta.EncryptedKeyChain = res.EncryptedKeyChain
 		meta.E2EEPublicKey = res.E2EEPublicKey
@@ -370,9 +387,10 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 	detectedLineID := networkid.UserLoginID(profile.Mid)
 
 	ul, err := ll.User.NewLogin(ctx, &database.UserLogin{
-		ID:         detectedLineID,
-		RemoteName: displayName,
-		Metadata:   meta,
+		ID:            detectedLineID,
+		RemoteName:    displayName,
+		RemoteProfile: status.RemoteProfile{Name: displayName},
+		Metadata:      meta,
 	}, &bridgev2.NewLoginParams{
 		LoadUserLogin: func(ctx context.Context, login *bridgev2.UserLogin) error {
 			login.Client = &LineClient{
