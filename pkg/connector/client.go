@@ -24,11 +24,31 @@ func (lc *LineClient) isTokenError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if line.IsNoUsableE2EEGroupKey(err) || line.IsNoUsableE2EEPublicKey(err) {
+	isE2EEGroup := line.IsNoUsableE2EEGroupKey(err)
+	isE2EEPub := line.IsNoUsableE2EEPublicKey(err)
+	if isE2EEGroup || isE2EEPub {
+		lc.UserLogin.Bridge.Log.Debug().
+			Bool("e2ee_group_key", isE2EEGroup).
+			Bool("e2ee_pub_key", isE2EEPub).
+			Str("error", err.Error()[:min(len(err.Error()), 100)]).
+			Msg("isTokenError: excluded as E2EE key error")
 		return false
 	}
-	return lc.isRefreshRequired(err) || lc.isLoggedOut(err) ||
-		strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403")
+	isRefresh := lc.isRefreshRequired(err)
+	isLogged := lc.isLoggedOut(err)
+	has401 := strings.Contains(err.Error(), "401")
+	has403 := strings.Contains(err.Error(), "403")
+	result := isRefresh || isLogged || has401 || has403
+	if !result {
+		lc.UserLogin.Bridge.Log.Debug().
+			Bool("refresh_required", isRefresh).
+			Bool("logged_out", isLogged).
+			Bool("has_401", has401).
+			Bool("has_403", has403).
+			Str("error", err.Error()[:min(len(err.Error()), 100)]).
+			Msg("isTokenError: not a token error")
+	}
+	return result
 }
 
 // callWithRecovery creates a LINE API client and calls fn. If the call fails
