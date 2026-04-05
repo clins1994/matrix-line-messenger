@@ -189,9 +189,7 @@ func (lc *LineClient) recoverToken(ctx context.Context) error {
 	if err := lc.tryLogin(ctx); err != nil {
 		lc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
-			Error:      "line-recovery-failed",
 			Message:    fmt.Sprintf("Token recovery failed: %v", err),
-			UserAction: status.UserActionRelogin,
 		})
 		return err
 	}
@@ -227,9 +225,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 		if err := lc.tryLogin(ctx); err != nil {
 			lc.UserLogin.BridgeState.Send(status.BridgeState{
 				StateEvent: status.StateBadCredentials,
-				Error:      "line-login-failed",
 				Message:    err.Error(),
-				UserAction: status.UserActionRelogin,
 			})
 			return
 		}
@@ -239,9 +235,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 	if err := lc.ensureValidToken(ctx); err != nil {
 		lc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
-			Error:      "line-token-expired",
 			Message:    fmt.Sprintf("session expired and could not be restored: %v", err),
-			UserAction: status.UserActionRelogin,
 		})
 		return
 	}
