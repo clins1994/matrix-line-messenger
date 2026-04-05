@@ -585,7 +585,7 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 
 		if plainThumbData != nil {
 			previewID := fmt.Sprintf("%s__ud-preview", sentMsg.ID)
-			if err := client.UploadOBSPlain(plainThumbData, previewID, obsType); err != nil {
+			if err := client.UploadOBSPlain(plainThumbData, previewID, "image"); err != nil {
 				lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to upload plain media thumbnail, continuing without it")
 			}
 		}
