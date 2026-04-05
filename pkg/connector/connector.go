@@ -64,7 +64,7 @@ func (lc *LineConnector) GetName() bridgev2.BridgeName {
 		NetworkURL:       "https://line.me",
 		NetworkIcon:      "",
 		NetworkID:        "line",
-		BeeperBridgeType: "github.com/highesttt/matrix-line-messenger",
+		BeeperBridgeType: "line",
 		DefaultPort:      29322,
 	}
 }
