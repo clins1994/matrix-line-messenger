@@ -106,6 +106,12 @@ func (lc *LineClient) refreshAndSave(ctx context.Context) error {
 		}
 	}
 
+	// Validate the new token with a lightweight API call before persisting it
+	validationClient := line.NewClient(lc.AccessToken)
+	if _, err := validationClient.GetProfile(); err != nil {
+		return fmt.Errorf("refreshed token failed validation: %w", err)
+	}
+
 	meta := lc.UserLogin.Metadata.(*UserLoginMetadata)
 	meta.AccessToken = lc.AccessToken
 	meta.RefreshToken = lc.RefreshToken
