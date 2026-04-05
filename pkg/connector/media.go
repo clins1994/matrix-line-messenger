@@ -223,9 +223,9 @@ func extractVideoThumbnail(videoData []byte) ([]byte, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("failed to create temp video file: %w", err)
 	}
 	defer os.Remove(tmpVideoFile.Name())
-	defer tmpVideoFile.Close()
 
 	if _, err := tmpVideoFile.Write(videoData); err != nil {
+		tmpVideoFile.Close()
 		return nil, 0, 0, fmt.Errorf("failed to write video data: %w", err)
 	}
 	tmpVideoFile.Close()
