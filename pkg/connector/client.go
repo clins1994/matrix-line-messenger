@@ -242,6 +242,14 @@ func (lc *LineClient) Connect(ctx context.Context) {
 
 	lc.scheduleTokenRefresh()
 
+	// Update remote profile so bridge states include the user's name
+	if lc.UserLogin.RemoteProfile.Name == "" {
+		if profile, err := line.NewClient(lc.AccessToken).GetProfile(); err == nil {
+			lc.UserLogin.RemoteName = profile.DisplayName
+			lc.UserLogin.RemoteProfile = status.RemoteProfile{Name: profile.DisplayName}
+		}
+	}
+
 	lc.UserLogin.Bridge.Log.Info().Int("token_len", len(lc.AccessToken)).Msg("LINE client connected; notifying bridge")
 	lc.UserLogin.BridgeState.Send(status.BridgeState{
 		StateEvent: status.StateConnected,

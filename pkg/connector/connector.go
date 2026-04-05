@@ -394,9 +394,10 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 	detectedLineID := networkid.UserLoginID(profile.Mid)
 
 	ul, err := ll.User.NewLogin(ctx, &database.UserLogin{
-		ID:         detectedLineID,
-		RemoteName: displayName,
-		Metadata:   meta,
+		ID:            detectedLineID,
+		RemoteName:    displayName,
+		RemoteProfile: status.RemoteProfile{Name: displayName},
+		Metadata:      meta,
 	}, &bridgev2.NewLoginParams{
 		LoadUserLogin: func(ctx context.Context, login *bridgev2.UserLogin) error {
 			login.Client = &LineClient{
