@@ -65,7 +65,9 @@ func (lc *LineClient) fetchAndUnwrapGroupKey(ctx context.Context, chatMid string
 }
 
 func (lc *LineClient) ensurePeerKey(ctx context.Context, mid string) (int, string, error) {
+	lc.dataMu.RLock()
 	cached, ok := lc.peerKeys[mid]
+	lc.dataMu.RUnlock()
 
 	if ok {
 		if cached.noE2EE && time.Since(cached.checkedAt) < noE2EETTL {
@@ -87,7 +89,9 @@ func (lc *LineClient) ensurePeerKey(ctx context.Context, mid string) (int, strin
 	})
 	if err != nil {
 		if line.IsNoUsableE2EEPublicKey(err) {
+			lc.dataMu.Lock()
 			lc.peerKeys[mid] = peerKeyInfo{noE2EE: true, checkedAt: time.Now()}
+			lc.dataMu.Unlock()
 			lc.UserLogin.Bridge.Log.Info().Str("peer", mid).Msg("Peer has Letter Sealing disabled, will send plain text")
 		}
 		return 0, "", err
@@ -97,7 +101,9 @@ func (lc *LineClient) ensurePeerKey(ctx context.Context, mid string) (int, strin
 		return 0, "", err
 	}
 	pk := peerKeyInfo{raw: int(keyID), pub: res.PublicKey}
+	lc.dataMu.Lock()
 	lc.peerKeys[mid] = pk
+	lc.dataMu.Unlock()
 	if lc.E2EE != nil {
 		lc.E2EE.RegisterPeerPublicKey(pk.raw, pk.pub)
 	}
@@ -106,22 +112,30 @@ func (lc *LineClient) ensurePeerKey(ctx context.Context, mid string) (int, strin
 
 // isGroupNoE2EE checks if a group is cached as having no E2EE shared key.
 func (lc *LineClient) isGroupNoE2EE(chatMid string) bool {
+	lc.dataMu.RLock()
 	checkedAt, ok := lc.noE2EEGroups[chatMid]
+	lc.dataMu.RUnlock()
 	return ok && time.Since(checkedAt) < noE2EETTL
 }
 
 // markGroupNoE2EE caches a group as having no E2EE shared key.
 func (lc *LineClient) markGroupNoE2EE(chatMid string) {
+	lc.dataMu.Lock()
 	lc.noE2EEGroups[chatMid] = time.Now()
+	lc.dataMu.Unlock()
 }
 
 // clearGroupNoE2EE removes a group from the noE2EE cache (e.g., when we receive encrypted messages).
 func (lc *LineClient) clearGroupNoE2EE(chatMid string) {
+	lc.dataMu.Lock()
 	delete(lc.noE2EEGroups, chatMid)
+	lc.dataMu.Unlock()
 }
 
 func (lc *LineClient) ensurePeerKeyByID(_ context.Context, mid string, keyID int) (int, string, error) {
+	lc.dataMu.RLock()
 	cached, ok := lc.peerKeys[mid]
+	lc.dataMu.RUnlock()
 
 	if ok && cached.raw == keyID && cached.pub != "" {
 		if lc.E2EE != nil {
@@ -146,7 +160,9 @@ func (lc *LineClient) ensurePeerKeyByID(_ context.Context, mid string, keyID int
 	}
 
 	pk := peerKeyInfo{raw: int(resKeyID), pub: res.PublicKey}
+	lc.dataMu.Lock()
 	lc.peerKeys[mid] = pk
+	lc.dataMu.Unlock()
 	if lc.E2EE != nil {
 		lc.E2EE.RegisterPeerPublicKey(pk.raw, pk.pub)
 	}
@@ -160,9 +176,14 @@ func (lc *LineClient) ensurePeerKeyForMessage(ctx context.Context, msg *line.Mes
 
 	// If we receive an encrypted message from a peer we cached as noE2EE,
 	// they must have enabled Letter Sealing — invalidate the cache.
-	if cached, ok := lc.peerKeys[msg.From]; ok && cached.noE2EE {
+	lc.dataMu.RLock()
+	cached, ok := lc.peerKeys[msg.From]
+	lc.dataMu.RUnlock()
+	if ok && cached.noE2EE {
 		lc.UserLogin.Bridge.Log.Info().Str("peer", msg.From).Msg("Received encrypted message from peer previously cached as noE2EE, invalidating cache")
+		lc.dataMu.Lock()
 		delete(lc.peerKeys, msg.From)
+		lc.dataMu.Unlock()
 	}
 
 	// Group messages have a different chunk layout
