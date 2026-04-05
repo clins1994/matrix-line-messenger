@@ -340,6 +340,13 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 		displayName = "LINE User"
 	}
 
+	ll.User.Log.Info().
+		Bool("has_certificate", res.Certificate != "").
+		Int("cert_len", len(res.Certificate)).
+		Bool("has_auth_token", res.AuthToken != "").
+		Bool("has_mid", res.Mid != "").
+		Bool("no_e2ee", res.NoE2EE).
+		Msg("finishLogin: saving login result")
 	meta := &UserLoginMetadata{AccessToken: token, RefreshToken: refreshToken, Email: ll.Email, Password: ll.Password, Certificate: res.Certificate, Mid: res.Mid}
 	if res.TokenV3IssueResult != nil && res.TokenV3IssueResult.DurationUntilRefreshSec != "" {
 		if d, err := strconv.ParseInt(res.TokenV3IssueResult.DurationUntilRefreshSec, 10, 64); err == nil {
