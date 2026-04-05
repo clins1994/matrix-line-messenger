@@ -27,6 +27,15 @@ type LineConnector struct {
 
 var _ bridgev2.NetworkConnector = (*LineConnector)(nil)
 
+func init() {
+	status.BridgeStateHumanErrors.Update(status.BridgeStateErrorMap{
+		"line-recovery-failed": "Your LINE session expired and could not be restored. Please reconnect the bridge.",
+		"line-login-failed":    "LINE login failed. Please reconnect the bridge.",
+		"line-token-expired":   "Your LINE session expired. Please reconnect the bridge.",
+		"line-logged-out":      "You were logged out from LINE (another device logged in). Please reconnect the bridge.",
+	})
+}
+
 func (lc *LineConnector) Init(bridge *bridgev2.Bridge) {
 	lc.br = bridge
 }
