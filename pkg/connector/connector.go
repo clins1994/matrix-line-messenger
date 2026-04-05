@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -370,13 +369,6 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 
 	detectedLineID := networkid.UserLoginID(profile.Mid)
 
-	var durationUntilRefreshSec int64
-	if res.TokenV3IssueResult != nil && res.TokenV3IssueResult.DurationUntilRefreshSec != "" {
-		if dur, err := strconv.ParseInt(res.TokenV3IssueResult.DurationUntilRefreshSec, 10, 64); err == nil && dur > 0 {
-			durationUntilRefreshSec = dur
-		}
-	}
-
 	ul, err := ll.User.NewLogin(ctx, &database.UserLogin{
 		ID:         detectedLineID,
 		RemoteName: displayName,
@@ -384,11 +376,10 @@ func (ll *LineEmailLogin) finishLogin(ctx context.Context, res *line.LoginResult
 	}, &bridgev2.NewLoginParams{
 		LoadUserLogin: func(ctx context.Context, login *bridgev2.UserLogin) error {
 			login.Client = &LineClient{
-				UserLogin:               login,
-				AccessToken:             token,
-				RefreshToken:            refreshToken,
-				HTTPClient:              &http.Client{Timeout: 10 * time.Second},
-				durationUntilRefreshSec: durationUntilRefreshSec,
+				UserLogin:    login,
+				AccessToken:  token,
+				RefreshToken: refreshToken,
+				HTTPClient:   &http.Client{Timeout: 10 * time.Second},
 			}
 			return nil
 		},

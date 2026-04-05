@@ -396,4 +396,3 @@ func (lc *LineClient) pollLoop(ctx context.Context) {
 		}
 	}
 }
-
