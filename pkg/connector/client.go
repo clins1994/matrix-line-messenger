@@ -59,6 +59,8 @@ type LineClient struct {
 
 	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
 	contactCache map[string]cachedContact
+
+	dataMu sync.RWMutex // protects peerKeys, contactCache, noE2EEGroups
 }
 
 type peerKeyInfo struct {
@@ -129,6 +131,7 @@ func (lc *LineClient) recoverToken(ctx context.Context) error {
 }
 
 func (lc *LineClient) Connect(ctx context.Context) {
+	lc.dataMu.Lock()
 	if lc.peerKeys == nil {
 		lc.peerKeys = make(map[string]peerKeyInfo)
 	}
@@ -138,6 +141,7 @@ func (lc *LineClient) Connect(ctx context.Context) {
 	if lc.noE2EEGroups == nil {
 		lc.noE2EEGroups = make(map[string]time.Time)
 	}
+	lc.dataMu.Unlock()
 	lc.reqSeqMu.Lock()
 	if lc.sentReqSeqs == nil {
 		lc.sentReqSeqs = make(map[int]time.Time)

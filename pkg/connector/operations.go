@@ -22,7 +22,9 @@ func (lc *LineClient) handleOperation(ctx context.Context, op line.Operation) {
 
 	if OperationType(op.Type) == OpContactUpdate {
 		mid := op.Param1
+		lc.dataMu.Lock()
 		delete(lc.contactCache, mid)
+		lc.dataMu.Unlock()
 		contact := lc.getContact(ctx, mid)
 		name := contact.EffectiveDisplayName()
 		lc.UserLogin.Bridge.Log.Info().Str("mid", mid).Str("name", name).Msg("Contact updated")
