@@ -27,18 +27,6 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 	switch ContentType(msg.ContentType) {
 	case ContentText, ContentImage, ContentVideo, ContentAudio, ContentSticker, ContentFile:
 		// supported — continue
-	case ContentSystem:
-		// Allow call notification system messages (C_ML, C_MI, C_PI) through
-		if msg.ContentMetadata != nil {
-			switch msg.ContentMetadata["LOC_KEY"] {
-			case "C_ML", "C_MI", "C_PI":
-				// call notification — continue
-			default:
-				return
-			}
-		} else {
-			return
-		}
 	default:
 		lc.UserLogin.Bridge.Log.Debug().
 			Int("content_type", msg.ContentType).
@@ -168,12 +156,6 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 		ID:   networkid.MessageID(msg.ID),
 		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data line.Message) (*bridgev2.ConvertedMessage, error) {
 			replyRelatesTo := lc.resolveReplyRelatesTo(ctx, &data)
-
-			// Handle call notification system messages (content type 18)
-			if ContentType(data.ContentType) == ContentSystem {
-				return callNotificationMessage(), nil
-			}
-
 			// Handle Images
 			client := line.NewClient(lc.AccessToken)
 			if ContentType(data.ContentType) == ContentImage {
