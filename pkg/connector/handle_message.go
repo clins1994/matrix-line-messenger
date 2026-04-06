@@ -159,17 +159,36 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 
 			// Handle call events (ORGCONTP == "CALL")
 			if data.ContentMetadata["ORGCONTP"] == "CALL" {
-				callType := "voice"
+				callType := "Voice"
 				if data.ContentMetadata["TYPE"] == "V" {
-					callType = "video"
+					callType = "Video"
 				}
-				body := fmt.Sprintf("Incoming %s call. Use the LINE app to answer.", callType)
+
+				duration, _ := strconv.Atoi(data.ContentMetadata["DURATION"])
+				result := data.ContentMetadata["RESULT"]
+
+				var body string
+				switch {
+				case duration > 0:
+					mins := duration / 60
+					secs := duration % 60
+					if mins > 0 {
+						body = fmt.Sprintf("%s call (%dm%02ds)", callType, mins, secs)
+					} else {
+						body = fmt.Sprintf("%s call (%ds)", callType, secs)
+					}
+				case result == "CANCELED":
+					body = fmt.Sprintf("Missed %s call", strings.ToLower(callType))
+				default:
+					body = fmt.Sprintf("Missed %s call", strings.ToLower(callType))
+				}
+
 				return &bridgev2.ConvertedMessage{
 					Parts: []*bridgev2.ConvertedMessagePart{
 						{
 							Type: event.EventMessage,
 							Content: &event.MessageEventContent{
-								MsgType:   event.MsgText,
+								MsgType:   event.MsgNotice,
 								Body:      body,
 								RelatesTo: replyRelatesTo,
 							},
