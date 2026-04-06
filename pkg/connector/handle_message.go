@@ -672,12 +672,6 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				return nil, nil
 			}
 
-			// Detect call notifications sent as plain text by LINE
-			// (outgoing calls from phone arrive as content type 0 with this text)
-			if isCallNotificationText(unwrappedText) {
-				return callNotificationMessage(), nil
-			}
-
 			// Default to Text
 			content := &event.MessageEventContent{
 				MsgType:   event.MsgText,
@@ -720,32 +714,4 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 	})
 }
 
-// callNotificationText is the text LINE sends to Chrome Extension clients
-// for call events, since the extension cannot handle calls.
-var callNotificationText = []string{
-	"Your OS version doesn't support this feature.",
-	"ご利用の端末ではこの機能に対応していません。",
-}
 
-func isCallNotificationText(text string) bool {
-	for _, t := range callNotificationText {
-		if text == t {
-			return true
-		}
-	}
-	return false
-}
-
-func callNotificationMessage() *bridgev2.ConvertedMessage {
-	return &bridgev2.ConvertedMessage{
-		Parts: []*bridgev2.ConvertedMessagePart{
-			{
-				Type: event.EventMessage,
-				Content: &event.MessageEventContent{
-					MsgType: event.MsgNotice,
-					Body:    "\U0001F4DE Call",
-				},
-			},
-		},
-	}
-}
