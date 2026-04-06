@@ -164,7 +164,8 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 					callType = "Video"
 				}
 
-				duration, _ := strconv.Atoi(data.ContentMetadata["DURATION"])
+				durationMs, _ := strconv.Atoi(data.ContentMetadata["DURATION"])
+				duration := durationMs / 1000
 				result := data.ContentMetadata["RESULT"]
 
 				var body string
