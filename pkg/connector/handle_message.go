@@ -27,6 +27,18 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 	switch ContentType(msg.ContentType) {
 	case ContentText, ContentImage, ContentVideo, ContentAudio, ContentSticker, ContentFile:
 		// supported — continue
+	case ContentSystem:
+		// Allow call notification system messages (C_ML, C_MI, C_PI) through
+		if msg.ContentMetadata != nil {
+			switch msg.ContentMetadata["LOC_KEY"] {
+			case "C_ML", "C_MI", "C_PI":
+				// call notification — continue
+			default:
+				return
+			}
+		} else {
+			return
+		}
 	default:
 		lc.UserLogin.Bridge.Log.Debug().
 			Int("content_type", msg.ContentType).
@@ -156,6 +168,12 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 		ID:   networkid.MessageID(msg.ID),
 		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data line.Message) (*bridgev2.ConvertedMessage, error) {
 			replyRelatesTo := lc.resolveReplyRelatesTo(ctx, &data)
+
+			// Handle call notification system messages (content type 18)
+			if ContentType(data.ContentType) == ContentSystem {
+				return callNotificationMessage(), nil
+			}
+
 			// Handle Images
 			client := line.NewClient(lc.AccessToken)
 			if ContentType(data.ContentType) == ContentImage {
@@ -672,6 +690,12 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				return nil, nil
 			}
 
+			// Detect call notifications sent as plain text by LINE
+			// (outgoing calls from phone arrive as content type 0 with this text)
+			if isCallNotificationText(unwrappedText) {
+				return callNotificationMessage(), nil
+			}
+
 			// Default to Text
 			content := &event.MessageEventContent{
 				MsgType:   event.MsgText,
@@ -712,4 +736,34 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 			}, nil
 		},
 	})
+}
+
+// callNotificationText is the text LINE sends to Chrome Extension clients
+// for call events, since the extension cannot handle calls.
+var callNotificationText = []string{
+	"Your OS version doesn't support this feature.",
+	"ご利用の端末ではこの機能に対応していません。",
+}
+
+func isCallNotificationText(text string) bool {
+	for _, t := range callNotificationText {
+		if text == t {
+			return true
+		}
+	}
+	return false
+}
+
+func callNotificationMessage() *bridgev2.ConvertedMessage {
+	return &bridgev2.ConvertedMessage{
+		Parts: []*bridgev2.ConvertedMessagePart{
+			{
+				Type: event.EventMessage,
+				Content: &event.MessageEventContent{
+					MsgType: event.MsgNotice,
+					Body:    "\U0001F4DE Call",
+				},
+			},
+		},
+	}
 }

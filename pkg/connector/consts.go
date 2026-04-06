@@ -25,6 +25,7 @@ const (
 	ContentAudio   ContentType = 3
 	ContentSticker ContentType = 7
 	ContentFile    ContentType = 14
+	ContentSystem  ContentType = 18
 )
 
 // ToType values for LINE message destinations.
