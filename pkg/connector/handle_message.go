@@ -159,16 +159,17 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 
 			// Handle call events (ORGCONTP == "CALL")
 			if data.ContentMetadata["ORGCONTP"] == "CALL" {
-				body := "\U0001F4DE Call"
+				callType := "voice"
 				if data.ContentMetadata["TYPE"] == "V" {
-					body = "\U0001F4F9 Video call"
+					callType = "video"
 				}
+				body := fmt.Sprintf("Incoming %s call. Use the LINE app to answer.", callType)
 				return &bridgev2.ConvertedMessage{
 					Parts: []*bridgev2.ConvertedMessagePart{
 						{
 							Type: event.EventMessage,
 							Content: &event.MessageEventContent{
-								MsgType:   event.MsgNotice,
+								MsgType:   event.MsgText,
 								Body:      body,
 								RelatesTo: replyRelatesTo,
 							},
