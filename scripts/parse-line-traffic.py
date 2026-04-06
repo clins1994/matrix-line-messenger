@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Parse Chrome net-log JSON and extract LINE-related network traffic.
+"""Parse LINE network captures (CDP or net-log format).
 
 Usage:
-    python3 scripts/parse-line-traffic.py <net-log.json> [output.json]
+    python3 scripts/parse-line-traffic.py <capture.json> [output.json]
+
+Supports two input formats:
+- CDP capture (from line-cdp-capture.py): has SSE message bodies, Thrift response bodies
+- Chrome net-log: lower-level, lacks streaming body data
 
 Extracts HTTP requests/responses to LINE domains and writes a structured
 JSON summary suitable for analysis by Claude or other tools.
@@ -206,28 +210,111 @@ def categorize_requests(requests: list) -> dict:
     return dict(categories)
 
 
+def is_cdp_capture(data: dict) -> bool:
+    """Check if the input is a CDP capture (vs net-log)."""
+    return data.get("capture_method") == "cdp"
+
+
+def parse_cdp_capture(data: dict) -> dict:
+    """Parse a CDP capture file into the same format as parse_netlog."""
+    requests = data.get("requests", [])
+    sse_messages = data.get("sse_messages", [])
+
+    line_requests = []
+    for req in requests:
+        url = req.get("url", "")
+        entry = {
+            "url": url,
+            "method": req.get("method", "GET"),
+        }
+        if "status" in req:
+            entry["status"] = req["status"]
+
+        # Extract interesting request headers
+        headers = req.get("headers", {})
+        interesting_req = {}
+        for k, v in headers.items():
+            if k.lower() in (
+                "content-type", "x-line-access", "x-line-application",
+                "x-lhm", "x-lpv", "x-lsr", "x-obs-params",
+                "x-line-channeltoken", "accept",
+            ):
+                interesting_req[k] = v
+        if interesting_req:
+            entry["request_headers"] = interesting_req
+
+        # Extract interesting response headers
+        resp_headers = req.get("response_headers", {})
+        interesting_resp = {}
+        for k, v in resp_headers.items():
+            if k.lower() in (
+                "content-type", "x-obs-oid", "x-line-next-access-token",
+                "x-line-error-code", "x-line-error-message",
+            ):
+                interesting_resp[k] = v
+        if interesting_resp:
+            entry["response_headers"] = interesting_resp
+
+        # Include response body if available
+        if "response_body" in req:
+            body_info = req["response_body"]
+            body = body_info.get("body", "")
+            if body_info.get("base64Encoded"):
+                entry["response_body_b64"] = body
+            else:
+                # Try to parse as JSON for readability
+                try:
+                    entry["response_body"] = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    entry["response_body_text"] = body
+
+        # Include request body if available
+        if "request_body" in req:
+            entry["request_body_text"] = req["request_body"]
+
+        entry["timestamp"] = req.get("timestamp", "")
+        line_requests.append(entry)
+
+    return {
+        "capture_method": "cdp",
+        "total_requests": len(requests),
+        "line_requests_count": len(line_requests),
+        "sse_messages_count": len(sse_messages),
+        "line_requests": line_requests,
+        "sse_messages": sse_messages,
+    }
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__, file=sys.stderr)
         sys.exit(1)
 
-    netlog_path = sys.argv[1]
+    input_path = sys.argv[1]
     output_path = sys.argv[2] if len(sys.argv) > 2 else None
 
-    if not os.path.exists(netlog_path):
-        print(f"File not found: {netlog_path}", file=sys.stderr)
+    if not os.path.exists(input_path):
+        print(f"File not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    result = parse_netlog(netlog_path)
+    print(f"Reading {input_path}...", file=sys.stderr)
+    with open(input_path, "r") as f:
+        data = json.load(f)
+
+    if is_cdp_capture(data):
+        result = parse_cdp_capture(data)
+    else:
+        result = parse_netlog(input_path)
 
     # Add categorized view
     result["by_category"] = categorize_requests(result["line_requests"])
 
     # Summary
     print(f"\n=== LINE Traffic Summary ===", file=sys.stderr)
-    print(f"Total net-log events: {result['total_events']}", file=sys.stderr)
-    print(f"Total sources: {result['total_sources']}", file=sys.stderr)
+    print(f"Capture method: {result.get('capture_method', 'net-log')}", file=sys.stderr)
     print(f"LINE requests found: {result['line_requests_count']}", file=sys.stderr)
+    if result.get("sse_messages_count"):
+        print(f"SSE messages captured: {result['sse_messages_count']}", file=sys.stderr)
     for cat, reqs in result["by_category"].items():
         print(f"  {cat}: {len(reqs)}", file=sys.stderr)
 
@@ -239,7 +326,7 @@ def main():
         print(f"\nOutput written to: {output_path}", file=sys.stderr)
     else:
         # Default output location
-        default_out = netlog_path.replace(".json", "-parsed.json")
+        default_out = input_path.replace(".json", "-parsed.json")
         with open(default_out, "w") as f:
             f.write(output_json)
         print(f"\nOutput written to: {default_out}", file=sys.stderr)
