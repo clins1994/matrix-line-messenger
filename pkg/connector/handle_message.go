@@ -156,6 +156,27 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 		ID:   networkid.MessageID(msg.ID),
 		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data line.Message) (*bridgev2.ConvertedMessage, error) {
 			replyRelatesTo := lc.resolveReplyRelatesTo(ctx, &data)
+
+			// Handle call events (ORGCONTP == "CALL")
+			if data.ContentMetadata["ORGCONTP"] == "CALL" {
+				body := "\U0001F4DE Call"
+				if data.ContentMetadata["TYPE"] == "V" {
+					body = "\U0001F4F9 Video call"
+				}
+				return &bridgev2.ConvertedMessage{
+					Parts: []*bridgev2.ConvertedMessagePart{
+						{
+							Type: event.EventMessage,
+							Content: &event.MessageEventContent{
+								MsgType:   event.MsgNotice,
+								Body:      body,
+								RelatesTo: replyRelatesTo,
+							},
+						},
+					},
+				}, nil
+			}
+
 			// Handle Images
 			client := line.NewClient(lc.AccessToken)
 			if ContentType(data.ContentType) == ContentImage {
