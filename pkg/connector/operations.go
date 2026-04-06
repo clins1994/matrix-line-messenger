@@ -7,10 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/highesttt/matrix-line-messenger/pkg/line"
@@ -200,10 +203,15 @@ func (lc *LineClient) handleOperation(ctx context.Context, op line.Operation) {
 	}
 
 	if (OperationType(op.Type) == OpSendMessage || OperationType(op.Type) == OpReceiveMessage) && op.Message != nil {
-		// Handle group rename system messages (contentType=18, LOC_KEY="C_PN")
+		// Handle system messages (contentType=18)
 		if op.Message.ContentType == 18 {
-			if op.Message.ContentMetadata != nil && op.Message.ContentMetadata["LOC_KEY"] == "C_PN" {
-				lc.handleGroupRename(op)
+			if op.Message.ContentMetadata != nil {
+				switch op.Message.ContentMetadata["LOC_KEY"] {
+				case "C_PN":
+					lc.handleGroupRename(op)
+				case "C_ML", "C_MI", "C_PI":
+					lc.handleCallNotification(op)
+				}
 			}
 			return
 		}
@@ -298,6 +306,54 @@ func (lc *LineClient) handleGroupRename(op line.Operation) {
 			ChatInfo: &bridgev2.ChatInfo{
 				Name: &newName,
 			},
+		},
+	})
+}
+
+func (lc *LineClient) handleCallNotification(op line.Operation) {
+	msg := op.Message
+
+	senderID := makeUserID(msg.From)
+	portalIDStr := msg.From
+	if ToType(msg.ToType) == ToRoom || ToType(msg.ToType) == ToGroup {
+		portalIDStr = msg.To
+	}
+	portalKey := networkid.PortalKey{ID: makePortalID(portalIDStr), Receiver: lc.UserLogin.ID}
+
+	ts, _ := msg.CreatedTime.Int64()
+	if ts == 0 {
+		ts = time.Now().UnixMilli()
+	}
+
+	lc.UserLogin.Bridge.Log.Debug().
+		Str("loc_key", msg.ContentMetadata["LOC_KEY"]).
+		Str("from", msg.From).
+		Str("msg_id", msg.ID).
+		Msg("Handling call notification")
+
+	lc.UserLogin.Bridge.QueueRemoteEvent(lc.UserLogin, &simplevent.Message[line.Message]{
+		EventMeta: simplevent.EventMeta{
+			Type:         bridgev2.RemoteEventMessage,
+			LogContext:   func(c zerolog.Context) zerolog.Context { return c.Str("msg_id", msg.ID) },
+			PortalKey:    portalKey,
+			CreatePortal: true,
+			Sender:       bridgev2.EventSender{Sender: senderID},
+			Timestamp:    time.UnixMilli(ts),
+		},
+		Data: *msg,
+		ID:   networkid.MessageID(msg.ID),
+		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data line.Message) (*bridgev2.ConvertedMessage, error) {
+			return &bridgev2.ConvertedMessage{
+				Parts: []*bridgev2.ConvertedMessagePart{
+					{
+						Type: event.EventMessage,
+						Content: &event.MessageEventContent{
+							MsgType: event.MsgNotice,
+							Body:    "\U0001F4DE Call",
+						},
+					},
+				},
+			}, nil
 		},
 	})
 }
