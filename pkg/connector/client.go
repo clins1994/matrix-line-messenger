@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,12 @@ type LineClient struct {
 
 	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
 	contactCache map[string]cachedContact
+
+	refreshTimer            *time.Timer
+	durationUntilRefreshSec int64
+
+	recoverMu   sync.Mutex
+	recoverTime time.Time
 }
 
 type peerKeyInfo struct {
@@ -64,6 +71,17 @@ func (lc *LineClient) refreshAndSave(ctx context.Context) error {
 	if res.RefreshToken != "" {
 		lc.RefreshToken = res.RefreshToken
 	}
+	if res.DurationUntilRefreshSec != "" {
+		if d, err := strconv.ParseInt(res.DurationUntilRefreshSec, 10, 64); err == nil {
+			lc.durationUntilRefreshSec = d
+		}
+	}
+
+	// Validate the new token with a lightweight API call before persisting it
+	validationClient := line.NewClient(lc.AccessToken)
+	if _, err := validationClient.GetProfile(); err != nil {
+		return fmt.Errorf("refreshed token failed validation: %w", err)
+	}
 
 	meta := lc.UserLogin.Metadata.(*UserLoginMetadata)
 	meta.AccessToken = lc.AccessToken
@@ -89,14 +107,35 @@ func (lc *LineClient) isLoggedOut(err error) bool {
 }
 
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
-// Returns nil on success. On failure the caller should send StateBadCredentials.
+// Returns nil on success. On failure it sends StateBadCredentials automatically.
+// Concurrent callers are serialized; if recovery happened within the last 10 seconds
+// the call is a no-op (the token was already refreshed by another goroutine).
 func (lc *LineClient) recoverToken(ctx context.Context) error {
+	lc.recoverMu.Lock()
+	defer lc.recoverMu.Unlock()
+
+	if time.Since(lc.recoverTime) < 10*time.Second {
+		lc.UserLogin.Bridge.Log.Debug().Msg("Skipping token recovery — already recovered recently")
+		return nil
+	}
+
 	if err := lc.refreshAndSave(ctx); err == nil {
 		lc.UserLogin.Bridge.Log.Info().Msg("Token recovered via refresh")
+		lc.scheduleTokenRefresh()
+		lc.recoverTime = time.Now()
 		return nil
 	}
 	lc.UserLogin.Bridge.Log.Info().Msg("Refresh failed, attempting re-login with stored credentials...")
-	return lc.tryLogin(ctx)
+	if err := lc.tryLogin(ctx); err != nil {
+		lc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Message:    fmt.Sprintf("Token recovery failed: %v", err),
+		})
+		return err
+	}
+	lc.scheduleTokenRefresh()
+	lc.recoverTime = time.Now()
+	return nil
 }
 
 func (lc *LineClient) Connect(ctx context.Context) {
@@ -137,6 +176,8 @@ func (lc *LineClient) Connect(ctx context.Context) {
 		})
 		return
 	}
+
+	lc.scheduleTokenRefresh()
 
 	lc.UserLogin.Bridge.Log.Info().Int("token_len", len(lc.AccessToken)).Msg("LINE client connected; notifying bridge")
 	lc.UserLogin.BridgeState.Send(status.BridgeState{
@@ -292,7 +333,37 @@ func (lc *LineClient) ensureValidToken(ctx context.Context) error {
 	return lc.tryLogin(ctx)
 }
 
-func (lc *LineClient) Disconnect() {}
+// scheduleTokenRefresh sets a timer to proactively refresh the access token
+// before it expires. The timer fires 5 minutes before the server-reported
+// expiration so the bridge never operates with a stale token.
+func (lc *LineClient) scheduleTokenRefresh() {
+	if lc.durationUntilRefreshSec <= 0 {
+		return
+	}
+	const marginSec = 5 * 60
+	delaySec := lc.durationUntilRefreshSec - marginSec
+	if delaySec < 60 {
+		delaySec = 60
+	}
+	if lc.refreshTimer != nil {
+		lc.refreshTimer.Stop()
+	}
+	lc.refreshTimer = time.AfterFunc(time.Duration(delaySec)*time.Second, func() {
+		lc.UserLogin.Bridge.Log.Info().Int64("delay_sec", delaySec).Msg("Proactive token refresh triggered")
+		if err := lc.refreshAndSave(context.Background()); err != nil {
+			lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Proactive token refresh failed")
+			return
+		}
+		lc.scheduleTokenRefresh()
+	})
+	lc.UserLogin.Bridge.Log.Info().Int64("delay_sec", delaySec).Msg("Scheduled proactive token refresh")
+}
+
+func (lc *LineClient) Disconnect() {
+	if lc.refreshTimer != nil {
+		lc.refreshTimer.Stop()
+	}
+}
 
 func (lc *LineClient) IsLoggedIn() bool { return lc.AccessToken != "" }
 
