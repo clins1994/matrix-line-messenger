@@ -167,11 +167,26 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 					oid = data.ID
 				}
 
+				// Check MEDIA_CONTENT_INFO for animated flag before downloading
+				wantOriginal := false
+				if mediaInfo := data.ContentMetadata["MEDIA_CONTENT_INFO"]; mediaInfo != "" {
+					var info struct {
+						Animated bool `json:"animated"`
+					}
+					if json.Unmarshal([]byte(mediaInfo), &info) == nil && info.Animated {
+						wantOriginal = true
+					}
+				}
+
 				if oid != "" {
 					var imgData []byte
 					var err error
-					if isPlainMedia {
+					if isPlainMedia && wantOriginal {
+						imgData, err = client.DownloadOBSOriginal(oid, data.ID, "m")
+					} else if isPlainMedia {
 						imgData, err = client.DownloadOBSWithSID(oid, data.ID, "m")
+					} else if wantOriginal {
+						imgData, err = client.DownloadOBSOriginal(oid, data.ID, "emi")
 					} else {
 						imgData, err = client.DownloadOBS(oid, data.ID)
 					}
@@ -180,8 +195,12 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 					if err != nil && (strings.Contains(err.Error(), "401") || lc.isRefreshRequired(err) || lc.isLoggedOut(err)) {
 						if errRecover := lc.recoverToken(ctx); errRecover == nil {
 							client = line.NewClient(lc.AccessToken)
-							if isPlainMedia {
+							if isPlainMedia && wantOriginal {
+								imgData, err = client.DownloadOBSOriginal(oid, data.ID, "m")
+							} else if isPlainMedia {
 								imgData, err = client.DownloadOBSWithSID(oid, data.ID, "m")
+							} else if wantOriginal {
+								imgData, err = client.DownloadOBSOriginal(oid, data.ID, "emi")
 							} else {
 								imgData, err = client.DownloadOBS(oid, data.ID)
 							}
@@ -229,8 +248,44 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 						}
 					}
 
+					// Detect actual image format for correct MIME type
+					fileName := "image.jpg"
+					mimeType := "image/jpeg"
+					isAnimated := false
+
+					if isAnimatedGif(imgData) {
+						fileName = "image.gif"
+						mimeType = "image/gif"
+						isAnimated = true
+					} else if len(imgData) >= 3 && string(imgData[0:3]) == "GIF" {
+						fileName = "image.gif"
+						mimeType = "image/gif"
+					} else if len(imgData) >= 8 && string(imgData[:8]) == "\x89PNG\r\n\x1a\n" {
+						fileName = "image.png"
+						mimeType = "image/png"
+					} else if len(imgData) >= 4 && string(imgData[:4]) == "RIFF" && len(imgData) >= 12 && string(imgData[8:12]) == "WEBP" {
+						fileName = "image.webp"
+						mimeType = "image/webp"
+					}
+
+					// Also check MEDIA_CONTENT_INFO metadata for animation flag
+					if !isAnimated {
+						if mediaInfo := data.ContentMetadata["MEDIA_CONTENT_INFO"]; mediaInfo != "" {
+							var info struct {
+								Animated bool `json:"animated"`
+							}
+							if json.Unmarshal([]byte(mediaInfo), &info) == nil && info.Animated {
+								isAnimated = true
+								if mimeType != "image/gif" {
+									fileName = "image.gif"
+									mimeType = "image/gif"
+								}
+							}
+						}
+					}
+
 					// Upload to Matrix
-					mxc, file, err := intent.UploadMedia(ctx, portal.MXID, imgData, "image.jpg", "image/jpeg")
+					mxc, file, err := intent.UploadMedia(ctx, portal.MXID, imgData, fileName, mimeType)
 					if err != nil {
 						lc.UserLogin.Bridge.Log.Error().
 							Err(err).
@@ -239,15 +294,28 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 						return nil, fmt.Errorf("failed to upload image to matrix: %w", err)
 					}
 
+					msgType := event.MsgImage
+					var info *event.FileInfo
+					if isAnimated {
+						// Send as MsgVideo with fi.mau.gif so Beeper renders it as animated GIF
+						msgType = event.MsgVideo
+						info = &event.FileInfo{
+							MimeType: mimeType,
+							Size:     len(imgData),
+							MauGIF:   true,
+						}
+					}
+
 					return &bridgev2.ConvertedMessage{
 						Parts: []*bridgev2.ConvertedMessagePart{
 							{
 								Type: event.EventMessage,
 								Content: &event.MessageEventContent{
-									MsgType:   event.MsgImage,
-									Body:      "image.jpg",
+									MsgType:   msgType,
+									Body:      fileName,
 									URL:       mxc,
 									File:      file,
+									Info:      info,
 									RelatesTo: replyRelatesTo,
 								},
 							},

@@ -631,29 +631,50 @@ func (c *Client) DownloadOBS(oid string, messageID string) ([]byte, error) {
 }
 
 func (c *Client) DownloadOBSWithSID(oid string, messageID string, sid string) ([]byte, error) {
-	// URL structure: https://obs.line-apps.com/r/talk/{SID}/{OID}
+	return c.downloadOBSInternal(oid, messageID, sid, "")
+}
+
+// DownloadOBSOriginal downloads from OBS requesting the original quality version.
+// Appends /original to the URL path to get the full-quality file instead of a JPEG thumbnail.
+func (c *Client) DownloadOBSOriginal(oid string, messageID string, sid string) ([]byte, error) {
+	return c.downloadOBSInternal(oid, messageID, sid, "original")
+}
+
+func (c *Client) downloadOBSInternal(oid string, messageID string, sid string, suffix string) ([]byte, error) {
+	// URL structure: https://obs.line-apps.com/r/talk/{SID}/{OID}[/{suffix}]
 	// SID: emi (images), emv (videos), ema (audio), emf (files)
 	url := fmt.Sprintf("%s/r/talk/%s/%s", OBSBaseURL, sid, oid)
+	if suffix != "" {
+		url += "/" + suffix
+	}
 
 	obsToken, err := c.AcquireEncryptedAccessToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire encrypted access token: %w", err)
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	buildRequest := func() (*http.Request, error) {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("User-Agent", UserAgent)
+		if obsToken != "" {
+			req.Header.Set("x-line-access", obsToken)
+		}
+
+		if messageID != "" {
+			talkMeta := c.constructTalkMeta(messageID)
+			req.Header.Set("x-talk-meta", talkMeta)
+		}
+
+		return req, nil
+	}
+
+	req, err := buildRequest()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OBS download request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", UserAgent)
-	if obsToken != "" {
-		req.Header.Set("x-line-access", obsToken)
-	}
-
-	// Add x-talk-meta header with Thrift-encoded message
-	if messageID != "" {
-		talkMeta := c.constructTalkMeta(messageID)
-		req.Header.Set("x-talk-meta", talkMeta)
 	}
 
 	// Retry loop for 202 (media still processing, e.g. video transcoding)
@@ -667,16 +688,7 @@ func (c *Client) DownloadOBSWithSID(oid string, messageID string, sid string) ([
 		if (resp.StatusCode == 202 || resp.StatusCode == 404) && attempt < maxRetries {
 			resp.Body.Close()
 			time.Sleep(2 * time.Second)
-			// Rebuild request for retry
-			req, _ = http.NewRequest("GET", url, nil)
-			req.Header.Set("User-Agent", UserAgent)
-			if obsToken != "" {
-				req.Header.Set("x-line-access", obsToken)
-			}
-			if messageID != "" {
-				talkMeta := c.constructTalkMeta(messageID)
-				req.Header.Set("x-talk-meta", talkMeta)
-			}
+			req, _ = buildRequest()
 			continue
 		}
 

@@ -276,6 +276,83 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 			return nil, fmt.Errorf("failed to download video from matrix: %w", err)
 		}
 
+		// Beeper sends GIFs as MsgVideo with fi.mau.gif=true — treat as animated image
+		if msg.Content.Info != nil && msg.Content.Info.MauGIF {
+			// Convert video (mp4/webm) to actual GIF format for LINE
+			if !isAnimatedGif(data) {
+				gifData, convErr := convertVideoToGIF(data)
+				if convErr != nil {
+					return nil, fmt.Errorf("failed to convert video to GIF: %w", convErr)
+				}
+				data = gifData
+				lc.UserLogin.Bridge.Log.Info().
+					Int("gif_size", len(data)).
+					Msg("Converted video to GIF for LINE")
+			}
+
+			contentType = int(ContentImage)
+
+			if isGroup {
+				originalMediaData = data
+			}
+
+			uploadData, keyMaterialB64, err := lc.encryptFileData(data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encrypt GIF data: %w", err)
+			}
+
+			oid, err := client.UploadOBS(uploadData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to upload GIF to OBS: %w", err)
+			}
+
+			thumbnailData, thumbWidth, thumbHeight, err := generateThumbnail(data)
+			if err != nil {
+				lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to generate GIF thumbnail, continuing without it")
+			} else if thumbToUpload, err := encryptThumbnail(thumbnailData, keyMaterialB64); err != nil {
+				lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to encrypt GIF thumbnail, continuing without it")
+			} else {
+				previewOID := fmt.Sprintf("%s__ud-preview", oid)
+				if err := client.UploadOBSWithOID(thumbToUpload, previewOID); err != nil {
+					lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to upload GIF preview, continuing without it")
+				} else {
+					mediaThumbInfo := map[string]interface{}{
+						"width":  thumbWidth,
+						"height": thumbHeight,
+					}
+					if thumbInfoJSON, err := json.Marshal(mediaThumbInfo); err == nil {
+						contentMetadata["MEDIA_THUMB_INFO"] = string(thumbInfoJSON)
+					}
+				}
+			}
+
+			contentMetadata["OID"] = oid
+			contentMetadata["SID"] = "emi"
+			contentMetadata["FILE_SIZE"] = fmt.Sprintf("%d", len(uploadData))
+			contentMetadata["contentType"] = fmt.Sprintf("%d", ContentImage)
+			contentMetadata["ENC_KM"] = keyMaterialB64
+
+			fileName := msg.Content.GetFileName()
+			if fileName == "" {
+				fileName = "image.gif"
+			}
+			contentMetadata["FILE_NAME"] = fileName
+
+			mediaContentInfo := map[string]interface{}{
+				"category":  "original",
+				"fileSize":  len(uploadData),
+				"extension": "gif",
+				"animated":  true,
+			}
+			if mediaInfoJSON, err := json.Marshal(mediaContentInfo); err == nil {
+				contentMetadata["MEDIA_CONTENT_INFO"] = string(mediaInfoJSON)
+			}
+
+			imgPayload := map[string]string{"keyMaterial": keyMaterialB64}
+			payload, _ = json.Marshal(imgPayload)
+			break
+		}
+
 		contentType = int(ContentVideo)
 		contentMetadata["FILE_SIZE"] = fmt.Sprintf("%d", len(data))
 		contentMetadata["contentType"] = fmt.Sprintf("%d", ContentVideo)
