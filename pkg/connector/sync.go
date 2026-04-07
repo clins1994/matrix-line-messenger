@@ -280,6 +280,7 @@ func (lc *LineClient) chatToChatInfo(chat *line.Chat, excludeFromTimeline bool) 
 func (lc *LineClient) generateNameFromMembers(members map[string]bool) string {
 	var names []string
 	count := 0
+	lc.dataMu.RLock()
 	for mid := range members {
 		if mid == string(lc.UserLogin.ID) || mid == lc.Mid || strings.HasPrefix(mid, "c") || strings.HasPrefix(mid, "r") {
 			continue
@@ -292,6 +293,7 @@ func (lc *LineClient) generateNameFromMembers(members map[string]bool) string {
 			break
 		}
 	}
+	lc.dataMu.RUnlock()
 
 	finalNames := names
 	if len(names) > 3 {
@@ -419,7 +421,9 @@ func (lc *LineClient) handleOperation(ctx context.Context, op line.Operation) {
 
 	if OperationType(op.Type) == OpContactUpdate {
 		mid := op.Param1
+		lc.dataMu.Lock()
 		delete(lc.contactCache, mid)
+		lc.dataMu.Unlock()
 		contact := lc.getContact(ctx, mid)
 		name := contact.EffectiveDisplayName()
 		lc.UserLogin.Bridge.Log.Info().Str("mid", mid).Str("name", name).Msg("Contact updated")
