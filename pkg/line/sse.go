@@ -33,7 +33,10 @@ func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) er
 		req.Header.Set("Cookie", fmt.Sprintf("lct=%s", c.AccessToken))
 	}
 
-	resp, err := c.HTTPClient.Do(req)
+	// Use a timeout-free HTTP client for SSE long-polling.
+	// The default client has a 10-30s timeout which kills the SSE stream.
+	sseClient := &http.Client{}
+	resp, err := sseClient.Do(req)
 	if err != nil {
 		return err
 	}

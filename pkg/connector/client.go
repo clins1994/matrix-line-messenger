@@ -96,6 +96,42 @@ func (lc *LineClient) refreshAndSave(ctx context.Context) error {
 	return nil
 }
 
+// isTokenError returns true if the error indicates the access token is expired,
+// invalid, or the session was logged out from another device.
+// It returns false for E2EE key-specific errors that resemble auth errors.
+func (lc *LineClient) isTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	isE2EEGroup := line.IsNoUsableE2EEGroupKey(err)
+	isE2EEPub := line.IsNoUsableE2EEPublicKey(err)
+	if isE2EEGroup || isE2EEPub {
+		return false
+	}
+	isRefresh := lc.isRefreshRequired(err)
+	isLogged := lc.isLoggedOut(err)
+	has401 := strings.Contains(err.Error(), "401")
+	has403 := strings.Contains(err.Error(), "403")
+	return isRefresh || isLogged || has401 || has403
+}
+
+// callWithRecovery creates a LINE API client and calls fn. If the call fails
+// with a token error, it recovers the session and retries once.
+// Returns the (possibly refreshed) client so callers can reuse it.
+func (lc *LineClient) callWithRecovery(ctx context.Context, fn func(*line.Client) error) (*line.Client, error) {
+	client := line.NewClient(lc.AccessToken)
+	err := fn(client)
+	if err != nil && lc.isTokenError(err) {
+		if errRecover := lc.recoverToken(ctx); errRecover == nil {
+			client = line.NewClient(lc.AccessToken)
+			err = fn(client)
+		} else {
+			lc.UserLogin.Bridge.Log.Warn().Err(errRecover).Msg("callWithRecovery: recovery failed")
+		}
+	}
+	return client, err
+}
+
 func (lc *LineClient) isRefreshRequired(err error) bool {
 	return strings.Contains(err.Error(), "\"code\":119") || strings.Contains(err.Error(), "Access token refresh required")
 }
