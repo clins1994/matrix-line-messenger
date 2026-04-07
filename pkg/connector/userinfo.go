@@ -176,7 +176,10 @@ func (lc *LineClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*
 }
 
 func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
-	if cached, ok := lc.contactCache[mid]; ok && time.Since(cached.cachedAt) < contactCacheTTL {
+	lc.dataMu.RLock()
+	cached, cacheHit := lc.contactCache[mid]
+	lc.dataMu.RUnlock()
+	if cacheHit && time.Since(cached.cachedAt) < contactCacheTTL {
 		return cached.Contact
 	}
 
@@ -192,7 +195,9 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 		}
 		if err == nil && profile != nil {
 			contact := line.Contact{Mid: mid, DisplayName: profile.DisplayName, PicturePath: profile.PicturePath}
+			lc.dataMu.Lock()
 			lc.contactCache[mid] = cachedContact{Contact: contact, cachedAt: time.Now()}
+			lc.dataMu.Unlock()
 			return contact
 		}
 		return line.Contact{Mid: mid, DisplayName: mid}
@@ -208,7 +213,9 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 	}
 	if err == nil && res != nil && res.Contacts != nil {
 		if wrapper, ok := res.Contacts[mid]; ok {
+			lc.dataMu.Lock()
 			lc.contactCache[mid] = cachedContact{Contact: wrapper.Contact, cachedAt: time.Now()}
+			lc.dataMu.Unlock()
 			return wrapper.Contact
 		}
 	}
@@ -225,7 +232,9 @@ func (lc *LineClient) getContact(ctx context.Context, mid string) line.Contact {
 	if err == nil && buddy != nil {
 		lc.UserLogin.Bridge.Log.Debug().Str("mid", mid).Str("display_name", buddy.DisplayName).Str("picture_path", buddy.PicturePath).Msg("Got buddy profile")
 		contact := line.Contact{Mid: mid, DisplayName: buddy.DisplayName, PicturePath: buddy.PicturePath}
+		lc.dataMu.Lock()
 		lc.contactCache[mid] = cachedContact{Contact: contact, cachedAt: time.Now()}
+		lc.dataMu.Unlock()
 		return contact
 	}
 	if err != nil {
