@@ -63,15 +63,12 @@ Matrix Client <-> mautrix bridgev2 framework <-> LineConnector/LineClient <-> LI
 
 ### E2EE Design
 
-Two login paths exist:
-- **LSON (type 2):** Full E2EE — generates keypair, exchanges encrypted keychain, enables Curve25519-based message encryption
-- **LSOFF (type 0):** Fallback when LINE error 89 indicates E2EE not supported
+Login generates a keypair, exchanges an encrypted keychain, and enables Curve25519-based message encryption (Letter Sealing).
 
 Message encryption is hybrid:
 - Pure Go Curve25519 for known key material
 - WASM-transpiled white-box crypto for SKB-wrapped keys
 - V1 (AES-256-CBC + MAC) and V2 encryption schemes
-- Graceful fallback to plaintext when peer/group doesn't support E2EE
 
 ### Token Management
 

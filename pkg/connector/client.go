@@ -19,19 +19,8 @@ import (
 
 // isTokenError returns true if the error indicates the access token is expired,
 // invalid, or the session was logged out from another device.
-// It returns false for E2EE key-specific errors that resemble auth errors.
 func (lc *LineClient) isTokenError(err error) bool {
 	if err == nil {
-		return false
-	}
-	isE2EEGroup := line.IsNoUsableE2EEGroupKey(err)
-	isE2EEPub := line.IsNoUsableE2EEPublicKey(err)
-	if isE2EEGroup || isE2EEPub {
-		lc.UserLogin.Bridge.Log.Debug().
-			Bool("e2ee_group_key", isE2EEGroup).
-			Bool("e2ee_pub_key", isE2EEPub).
-			Str("error", err.Error()[:min(len(err.Error()), 100)]).
-			Msg("isTokenError: excluded as E2EE key error")
 		return false
 	}
 	isRefresh := lc.isRefreshRequired(err)
@@ -87,10 +76,9 @@ type LineClient struct {
 	reqSeqMu    sync.Mutex
 	sentReqSeqs map[int]time.Time
 
-	noE2EEGroups map[string]time.Time // chatMid -> when group E2EE failure was cached
 	contactCache map[string]cachedContact
 
-	dataMu sync.RWMutex // protects peerKeys, contactCache, noE2EEGroups
+	dataMu sync.RWMutex // protects peerKeys, contactCache
 
 	refreshTimer            *time.Timer
 	durationUntilRefreshSec int64
@@ -100,10 +88,8 @@ type LineClient struct {
 }
 
 type peerKeyInfo struct {
-	raw       int
-	pub       string
-	noE2EE    bool      // true if peer has Letter Sealing off
-	checkedAt time.Time // when noE2EE was last verified
+	raw int
+	pub string
 }
 
 const contactCacheTTL = 1 * time.Hour
@@ -205,9 +191,6 @@ func (lc *LineClient) Connect(ctx context.Context) {
 	}
 	if lc.contactCache == nil {
 		lc.contactCache = make(map[string]cachedContact)
-	}
-	if lc.noE2EEGroups == nil {
-		lc.noE2EEGroups = make(map[string]time.Time)
 	}
 	lc.dataMu.Unlock()
 	lc.reqSeqMu.Lock()
@@ -324,7 +307,6 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 		Bool("has_certificate", res.Certificate != "").
 		Bool("has_pin", res.Pin != "" || res.PinCode != "").
 		Bool("has_verifier", res.Verifier != "").
-		Bool("no_e2ee", res.NoE2EE).
 		Msg("Login response received")
 
 	if res.AuthToken == "" {
@@ -343,7 +325,7 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 
 		lc.UserLogin.Bridge.Log.Info().Msg("Waiting for PIN verification on mobile device...")
 		waitClient := line.NewClient("")
-		waitRes, err := waitClient.WaitForLogin(res.Verifier, res.NoE2EE)
+		waitRes, err := waitClient.WaitForLogin(res.Verifier)
 		if err != nil {
 			return fmt.Errorf("PIN verification failed: %w", err)
 		}
@@ -394,7 +376,6 @@ func (lc *LineClient) tryLogin(ctx context.Context) error {
 
 	lc.UserLogin.Bridge.Log.Info().
 		Bool("has_certificate", res.Certificate != "").
-		Bool("no_e2ee", res.NoE2EE).
 		Msg("Login successful!")
 	return nil
 }
