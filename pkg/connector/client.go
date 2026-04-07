@@ -140,8 +140,7 @@ func (lc *LineClient) isRefreshRequired(err error) bool {
 
 func (lc *LineClient) isLoggedOut(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "V3_TOKEN_CLIENT_LOGGED_OUT") ||
-		strings.Contains(msg, "\"code\":10051")
+	return strings.Contains(msg, "V3_TOKEN_CLIENT_LOGGED_OUT")
 }
 
 // recoverToken attempts to restore a valid session by refreshing, then re-logging in.
