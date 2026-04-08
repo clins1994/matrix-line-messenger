@@ -536,3 +536,46 @@ func (c *Client) SendChatRemoved(reqSeq int64, chatMid, lastReadMessageId string
 	_, err := c.callRPC("TalkService", "sendChatRemoved", reqSeq, chatMid, lastReadMessageId, lastReadMessageTime)
 	return err
 }
+
+// GetAllContactIds returns all friend MIDs.
+// Chrome Extension calls: getAllContactIds(2)
+func (c *Client) GetAllContactIds() ([]string, error) {
+	resp, err := c.callRPC("TalkService", "getAllContactIds", 2)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Code    int      `json:"code"`
+		Message string   `json:"message"`
+		Data    []string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return nil, err
+	}
+	if wrapper.Code != 0 {
+		return nil, fmt.Errorf("getAllContactIds failed: %s", wrapper.Message)
+	}
+	return wrapper.Data, nil
+}
+
+// GetLastE2EEPublicKeys fetches recently-updated E2EE public keys in bulk.
+// Chrome Extension calls: getLastE2EEPublicKeys(token)
+// Returns a map of MID -> E2EEPublicKey.
+func (c *Client) GetLastE2EEPublicKeys(token string) (map[string]*E2EEPublicKey, error) {
+	resp, err := c.callRPC("TalkService", "getLastE2EEPublicKeys", token)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Code    int                       `json:"code"`
+		Message string                    `json:"message"`
+		Data    map[string]*E2EEPublicKey `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return nil, err
+	}
+	if wrapper.Code != 0 {
+		return nil, fmt.Errorf("getLastE2EEPublicKeys failed: %s", wrapper.Message)
+	}
+	return wrapper.Data, nil
+}
