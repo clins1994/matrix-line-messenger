@@ -311,7 +311,7 @@ type ObsInfo struct {
 }
 
 type Settings struct {
-	E2EEEnable                     bool   `json:"e2eeEnable"`
-	PrivacyAllowSecondaryDeviceLogin bool `json:"privacyAllowSecondaryDeviceLogin"`
-	PreferenceLocale               string `json:"preferenceLocale"`
+	E2EEEnable                       bool   `json:"e2eeEnable"`
+	PrivacyAllowSecondaryDeviceLogin bool   `json:"privacyAllowSecondaryDeviceLogin"`
+	PreferenceLocale                 string `json:"preferenceLocale"`
 }
