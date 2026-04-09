@@ -568,7 +568,12 @@ func (lc *LineClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	lc.sentReqSeqs[reqSeq] = time.Now()
 	lc.reqSeqMu.Unlock()
 
-	sentMsg, err := client.SendMessage(int64(reqSeq), lineMsg)
+	var sentMsg *line.Message
+	client, err = lc.callWithRecovery(ctx, func(c *line.Client) error {
+		var e error
+		sentMsg, e = c.SendMessage(int64(reqSeq), lineMsg)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -627,8 +632,6 @@ func contentTypeForMsgType(msgType event.MessageType) int {
 }
 
 func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
-	client := line.NewClient(lc.AccessToken)
-
 	reqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
 	lc.reqSeqMu.Lock()
 	if lc.sentReqSeqs == nil {
@@ -637,12 +640,13 @@ func (lc *LineClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridge
 	lc.sentReqSeqs[reqSeq] = time.Now()
 	lc.reqSeqMu.Unlock()
 
-	return client.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	_, err := lc.callWithRecovery(ctx, func(c *line.Client) error {
+		return c.UnsendMessage(int64(reqSeq), string(msg.TargetMessage.ID))
+	})
+	return err
 }
 
 func (lc *LineClient) HandleMatrixLeaveRoom(ctx context.Context, portal *bridgev2.Portal) error {
-	client := line.NewClient(lc.AccessToken)
-
 	reqSeq := int(time.Now().UnixMilli() % 1_000_000_000)
 	lc.reqSeqMu.Lock()
 	if lc.sentReqSeqs == nil {
@@ -651,5 +655,8 @@ func (lc *LineClient) HandleMatrixLeaveRoom(ctx context.Context, portal *bridgev
 	lc.sentReqSeqs[reqSeq] = time.Now()
 	lc.reqSeqMu.Unlock()
 
-	return client.SendChatRemoved(int64(reqSeq), string(portal.ID), "0", 0)
+	_, err := lc.callWithRecovery(ctx, func(c *line.Client) error {
+		return c.SendChatRemoved(int64(reqSeq), string(portal.ID), "0", 0)
+	})
+	return err
 }
