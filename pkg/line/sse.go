@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// sseHTTPClient is a dedicated HTTP client for SSE connections with no timeout.
+// Reused across reconnects to avoid allocating a new transport pool each time.
+var sseHTTPClient = &http.Client{}
+
 // ListenSSE connects to the Event Stream and blocks
 func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) error {
 	q := url.Values{}
@@ -33,10 +37,7 @@ func (c *Client) ListenSSE(localRev int64, callback func(event, data string)) er
 		req.Header.Set("Cookie", fmt.Sprintf("lct=%s", c.AccessToken))
 	}
 
-	// SSE is a long-lived connection — use a client with no timeout
-	// instead of c.HTTPClient which has a 30s timeout for normal API calls.
-	sseClient := &http.Client{}
-	resp, err := sseClient.Do(req)
+	resp, err := sseHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
