@@ -65,14 +65,31 @@ func (lc *LineConnector) GetConfig() (example string, data any, upgrader configu
 
 func (lc *LineConnector) GetDBMetaTypes() database.MetaTypes {
 	return database.MetaTypes{
-		Portal:   nil,
-		Ghost:    nil,
-		Message:  nil,
+		Portal:   func() any { return &PortalMetadata{} },
+		Ghost:    func() any { return &GhostMetadata{} },
+		Message:  func() any { return &MessageMetadata{} },
 		Reaction: nil,
 		UserLogin: func() any {
 			return &UserLoginMetadata{}
 		},
 	}
+}
+
+// PortalMetadata stores LINE-specific portal data in the mautrix database.
+type PortalMetadata struct {
+	ChatType string `json:"chat_type,omitempty"` // "dm", "group", "room"
+}
+
+// GhostMetadata stores LINE-specific ghost (remote user) data.
+type GhostMetadata struct {
+	ProfileVersion string `json:"profile_version,omitempty"` // for change detection on avatar/name updates
+	ContactType    string `json:"contact_type,omitempty"`    // "contact", "buddy", "unknown"
+}
+
+// MessageMetadata stores LINE-specific message data.
+type MessageMetadata struct {
+	LineContentType *int `json:"line_content_type,omitempty"` // LINE's contentType integer
+	Encrypted       bool `json:"encrypted,omitempty"`         // whether the message was E2EE encrypted
 }
 
 type UserLoginMetadata struct {
