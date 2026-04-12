@@ -126,7 +126,11 @@ func (lc *LineClient) prefetchMessages(ctx context.Context) {
 
 	for _, box := range res.MessageBoxes {
 		// Fetch recent messages for all active chats to ensure history is populated
-		msgs, err := client.GetRecentMessagesV2(box.ID, 50)
+		prefetchCount := 50
+		if connector, ok := lc.UserLogin.Bridge.Network.(*LineConnector); ok {
+			prefetchCount = connector.BackfillCount()
+		}
+		msgs, err := client.GetRecentMessagesV2(box.ID, prefetchCount)
 		if err != nil {
 			lc.UserLogin.Bridge.Log.Warn().Err(err).Str("chat_mid", box.ID).Msg("Failed to fetch recent messages")
 			continue
