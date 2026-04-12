@@ -536,3 +536,23 @@ func (c *Client) SendChatRemoved(reqSeq int64, chatMid, lastReadMessageId string
 	_, err := c.callRPC("TalkService", "sendChatRemoved", reqSeq, chatMid, lastReadMessageId, lastReadMessageTime)
 	return err
 }
+
+// GetAllContactIds fetches the MIDs of all contacts in the user's friend list.
+func (c *Client) GetAllContactIds() ([]string, error) {
+	resp, err := c.callRPC("TalkService", "getAllContactIds", 2)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Code    int      `json:"code"`
+		Message string   `json:"message"`
+		Data    []string `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return nil, err
+	}
+	if wrapper.Code != 0 {
+		return nil, fmt.Errorf("getAllContactIds failed: %s", wrapper.Message)
+	}
+	return wrapper.Data, nil
+}
