@@ -44,6 +44,7 @@ func (lc *LineClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 	return &event.RoomFeatures{
 		MaxTextLength:         5000,
 		Reply:                 event.CapLevelFullySupported,
+		Edit:                  event.CapLevelRejected,
 		ReadReceipts:          true,
 		Delete:                event.CapLevelPartialSupport,
 		DeleteChatForEveryone: true,
@@ -264,4 +265,65 @@ func (lc *LineClient) GetAvatar(ctx context.Context, id networkid.AvatarID) ([]b
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+func (lc *LineClient) GetContactList(ctx context.Context) ([]*bridgev2.ResolveIdentifierResponse, error) {
+	client := line.NewClient(lc.AccessToken)
+	mids, err := client.GetAllContactIds()
+	if err != nil && (lc.isRefreshRequired(err) || lc.isLoggedOut(err)) {
+		if errRecover := lc.recoverToken(ctx); errRecover == nil {
+			client = line.NewClient(lc.AccessToken)
+			mids, err = client.GetAllContactIds()
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contact IDs: %w", err)
+	}
+
+	var result []*bridgev2.ResolveIdentifierResponse
+	for i := 0; i < len(mids); i += 20 {
+		end := min(i+20, len(mids))
+		batch := mids[i:end]
+
+		res, err := client.GetContactsV2(batch)
+		if err != nil && (lc.isRefreshRequired(err) || lc.isLoggedOut(err)) {
+			if errRecover := lc.recoverToken(ctx); errRecover == nil {
+				client = line.NewClient(lc.AccessToken)
+				res, err = client.GetContactsV2(batch)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get contacts: %w", err)
+		}
+		if res == nil || res.Contacts == nil {
+			continue
+		}
+
+		for _, wrapper := range res.Contacts {
+			contact := wrapper.Contact
+			lc.contactCache[contact.Mid] = cachedContact{Contact: contact, cachedAt: time.Now()}
+
+			name := contact.EffectiveDisplayName()
+			userInfo := &bridgev2.UserInfo{
+				Identifiers: []string{contact.Mid},
+				Name:        &name,
+			}
+			if contact.PicturePath != "" {
+				picturePath := contact.PicturePath
+				userInfo.Avatar = &bridgev2.Avatar{
+					ID: networkid.AvatarID(picturePath),
+					Get: func(ctx context.Context) ([]byte, error) {
+						return lc.GetAvatar(ctx, networkid.AvatarID(picturePath))
+					},
+				}
+			}
+
+			result = append(result, &bridgev2.ResolveIdentifierResponse{
+				UserID:   networkid.UserID(contact.Mid),
+				UserInfo: userInfo,
+			})
+		}
+	}
+
+	return result, nil
 }
