@@ -50,6 +50,7 @@ func (lc *LineClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 		Delete:                event.CapLevelFullySupported,
 		DeleteMaxAge:          &jsontime.Seconds{Duration: 24 * time.Hour},
 		DeleteChatForEveryone: true,
+		LocationMessage:       event.CapLevelPartialSupport,
 		File: event.FileFeatureMap{
 			event.MsgImage: {
 				Caption: event.CapLevelRejected,

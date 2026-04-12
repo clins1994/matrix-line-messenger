@@ -25,7 +25,7 @@ import (
 func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 	// Only process known content types; skip system messages (group created, member invited, etc.)
 	switch ContentType(msg.ContentType) {
-	case ContentText, ContentImage, ContentVideo, ContentAudio, ContentSticker, ContentFile:
+	case ContentText, ContentImage, ContentVideo, ContentAudio, ContentSticker, ContentContact, ContentFile, ContentLocation:
 		// supported — continue
 	default:
 		lc.UserLogin.Bridge.Log.Debug().
@@ -854,6 +854,95 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				}, nil
 			}
 
+			// Handle Location
+			if ContentType(data.ContentType) == ContentLocation {
+				if data.Location == nil {
+					return &bridgev2.ConvertedMessage{
+						Parts: []*bridgev2.ConvertedMessagePart{
+							{
+								Type: event.EventMessage,
+								Content: &event.MessageEventContent{
+									MsgType: event.MsgNotice,
+									Body:    "[Location unavailable]",
+								},
+							},
+						},
+					}, nil
+				}
+				if data.Location != nil {
+					geoURI := fmt.Sprintf("geo:%f,%f", data.Location.Latitude, data.Location.Longitude)
+					bodyParts := []string{}
+					if data.Location.Title != "" {
+						bodyParts = append(bodyParts, data.Location.Title)
+					}
+					if data.Location.Address != "" {
+						bodyParts = append(bodyParts, data.Location.Address)
+					}
+					body := strings.Join(bodyParts, "\n")
+					if body == "" {
+						body = geoURI
+					}
+					return &bridgev2.ConvertedMessage{
+						Parts: []*bridgev2.ConvertedMessagePart{
+							{
+								Type: event.EventMessage,
+								Content: &event.MessageEventContent{
+									MsgType:   event.MsgLocation,
+									Body:      body,
+									GeoURI:    geoURI,
+									RelatesTo: replyRelatesTo,
+								},
+							},
+						},
+					}, nil
+				}
+			}
+
+			// Handle Contact
+			if ContentType(data.ContentType) == ContentContact {
+				displayName := data.ContentMetadata["displayName"]
+				if displayName == "" {
+					displayName = "Unknown"
+				}
+				body := fmt.Sprintf("Shared contact: %s", displayName)
+				return &bridgev2.ConvertedMessage{
+					Parts: []*bridgev2.ConvertedMessagePart{
+						{
+							Type: event.EventMessage,
+							Content: &event.MessageEventContent{
+								MsgType:   event.MsgNotice,
+								Body:      body,
+								RelatesTo: replyRelatesTo,
+							},
+						},
+					},
+				}, nil
+			}
+
+			// Handle device/phone contact shared via ORGCONTP (contentType 0 with vCard)
+			if data.ContentMetadata["ORGCONTP"] == "CONTACT" {
+				displayName := data.ContentMetadata["displayName"]
+				if displayName == "" {
+					displayName = "Unknown"
+				}
+				body := fmt.Sprintf("Shared contact: %s", displayName)
+				if unwrappedText != "" {
+					body += "\n" + unwrappedText
+				}
+				return &bridgev2.ConvertedMessage{
+					Parts: []*bridgev2.ConvertedMessagePart{
+						{
+							Type: event.EventMessage,
+							Content: &event.MessageEventContent{
+								MsgType:   event.MsgNotice,
+								Body:      body,
+								RelatesTo: replyRelatesTo,
+							},
+						},
+					},
+				}, nil
+			}
+
 			// Skip empty/whitespace-only text messages (system messages that fell through)
 			if strings.TrimSpace(unwrappedText) == "" {
 				return nil, nil
@@ -864,6 +953,51 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				MsgType:   event.MsgText,
 				Body:      unwrappedText,
 				RelatesTo: replyRelatesTo,
+			}
+
+			// Handle mentions in text messages
+			if mentionJSON, ok := data.ContentMetadata["MENTION"]; ok && mentionJSON != "" {
+				type lineMentionEntry struct {
+					S string `json:"S"`
+					E string `json:"E"`
+					M string `json:"M"`
+				}
+				type lineMentionData struct {
+					Mentionees []lineMentionEntry `json:"MENTIONEES"`
+				}
+				var mentionData lineMentionData
+				if err := json.Unmarshal([]byte(mentionJSON), &mentionData); err == nil && len(mentionData.Mentionees) > 0 {
+					textRunes := []rune(unwrappedText)
+					htmlBody := unwrappedText
+
+					// Process from right to left so indices remain valid
+					for i := len(mentionData.Mentionees) - 1; i >= 0; i-- {
+						m := mentionData.Mentionees[i]
+						start, errS := strconv.Atoi(m.S)
+						end, errE := strconv.Atoi(m.E)
+						if errS != nil || errE != nil || start < 0 || end > len(textRunes) || start >= end {
+							continue
+						}
+
+						mentionText := string(textRunes[start:end])
+						ghost, err := lc.UserLogin.Bridge.GetGhostByID(ctx, networkid.UserID(m.M))
+						if err == nil && ghost != nil {
+							mxid := ghost.Intent.GetMXID()
+							// Replace in the HTML body (which uses bytes, not runes)
+							// We need to find the mention text in the HTML body and replace it
+							htmlMention := fmt.Sprintf(`<a href="https://matrix.to/#/%s">%s</a>`, mxid, mentionText)
+							// Use byte offsets from rune positions
+							byteStart := len(string(textRunes[:start]))
+							byteEnd := len(string(textRunes[:end]))
+							htmlBody = htmlBody[:byteStart] + htmlMention + htmlBody[byteEnd:]
+						}
+					}
+
+					if htmlBody != unwrappedText {
+						content.Format = event.FormatHTML
+						content.FormattedBody = htmlBody
+					}
+				}
 			}
 
 			urlRegex := regexp.MustCompile(`(https?://)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(/[^\s]*)?`)
