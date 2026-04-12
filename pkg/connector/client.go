@@ -58,6 +58,7 @@ type cachedContact struct {
 var _ bridgev2.NetworkAPI = (*LineClient)(nil)
 var _ bridgev2.ReadReceiptHandlingNetworkAPI = (*LineClient)(nil)
 var _ bridgev2.ContactListingNetworkAPI = (*LineClient)(nil)
+var _ bridgev2.BackfillingNetworkAPI = (*LineClient)(nil)
 
 func (lc *LineClient) refreshAndSave(ctx context.Context) error {
 	if lc.RefreshToken == "" {

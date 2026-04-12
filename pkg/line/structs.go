@@ -299,6 +299,17 @@ type MessageIDWrapper struct {
 	MessageID     string      `json:"messageId"`
 }
 
+type PreviousMessagesRequest struct {
+	MessageBoxID  string                 `json:"messageBoxId"`
+	EndMessageID  PreviousMessagesAnchor `json:"endMessageId"`
+	MessagesCount int                    `json:"messagesCount"`
+}
+
+type PreviousMessagesAnchor struct {
+	DeliveredTime string `json:"deliveredTime"`
+	MessageID     string `json:"messageId"`
+}
+
 type PageInfoResponse struct {
 	Result  PageInfoResult `json:"result"`
 	Code    int            `json:"code"`

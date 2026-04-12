@@ -22,7 +22,12 @@ import (
 )
 
 type LineConnector struct {
-	br *bridgev2.Bridge
+	br     *bridgev2.Bridge
+	Config LineConfig
+}
+
+type LineConfig struct {
+	BackfillMessageCount int `yaml:"backfill_message_count" json:"backfill_message_count"`
 }
 
 var _ bridgev2.NetworkConnector = (*LineConnector)(nil)
@@ -70,7 +75,15 @@ func (lc *LineConnector) GetName() bridgev2.BridgeName {
 }
 
 func (lc *LineConnector) GetConfig() (example string, data any, upgrader configupgrade.Upgrader) {
-	return "", nil, nil
+	return "backfill_message_count: 50\n", &lc.Config, nil
+}
+
+// BackfillCount returns the configured backfill message count, defaulting to 50.
+func (lc *LineConnector) BackfillCount() int {
+	if lc.Config.BackfillMessageCount <= 0 {
+		return 50
+	}
+	return lc.Config.BackfillMessageCount
 }
 
 func (lc *LineConnector) GetDBMetaTypes() database.MetaTypes {

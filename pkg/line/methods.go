@@ -527,6 +527,25 @@ func (c *Client) GetRecentMessagesV2(chatMid string, limit int) ([]*Message, err
 	return wrapper.Data, nil
 }
 
+func (c *Client) GetPreviousMessagesV2WithRequest(req PreviousMessagesRequest) ([]*Message, error) {
+	resp, err := c.callRPC("TalkService", "getPreviousMessagesV2WithRequest", req, 1)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Code    int        `json:"code"`
+		Message string     `json:"message"`
+		Data    []*Message `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return nil, err
+	}
+	if wrapper.Code != 0 {
+		return nil, fmt.Errorf("getPreviousMessagesV2WithRequest failed: %s", wrapper.Message)
+	}
+	return wrapper.Data, nil
+}
+
 func (c *Client) UnsendMessage(reqSeq int64, messageID string) error {
 	_, err := c.callRPC("TalkService", "unsendMessage", reqSeq, messageID)
 	return err
