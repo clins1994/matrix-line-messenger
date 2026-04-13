@@ -870,18 +870,18 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 					}, nil
 				}
 				if data.Location != nil {
-					geoURI := fmt.Sprintf("geo:%f,%f", data.Location.Latitude, data.Location.Longitude)
-					bodyParts := []string{}
+					geoURI := fmt.Sprintf("geo:%.6f,%.6f", data.Location.Latitude, data.Location.Longitude)
+					mapsURL := fmt.Sprintf("https://maps.google.com/maps?q=%.6f%%2C%.6f", data.Location.Latitude, data.Location.Longitude)
+
+					var bodyParts []string
 					if data.Location.Title != "" {
 						bodyParts = append(bodyParts, data.Location.Title)
 					}
 					if data.Location.Address != "" {
 						bodyParts = append(bodyParts, data.Location.Address)
 					}
+					bodyParts = append(bodyParts, mapsURL)
 					body := strings.Join(bodyParts, "\n")
-					if body == "" {
-						body = geoURI
-					}
 					return &bridgev2.ConvertedMessage{
 						Parts: []*bridgev2.ConvertedMessagePart{
 							{
@@ -898,20 +898,46 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				}
 			}
 
-			// Handle Contact
+			// Handle Contact (LINE contact — contentType 13)
 			if ContentType(data.ContentType) == ContentContact {
 				displayName := data.ContentMetadata["displayName"]
 				if displayName == "" {
 					displayName = "Unknown"
 				}
-				body := fmt.Sprintf("Shared contact: %s", displayName)
+				// Build a minimal vCard for LINE contacts
+				vcard := fmt.Sprintf("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:%s\r\nEND:VCARD\r\n", displayName)
+				fileName := displayName + ".vcf"
+				vcardBytes := []byte(vcard)
+				mxc, file, err := intent.UploadMedia(ctx, portal.MXID, vcardBytes, fileName, "text/vcard")
+				if err != nil {
+					lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to upload LINE contact vCard")
+					return &bridgev2.ConvertedMessage{
+						Parts: []*bridgev2.ConvertedMessagePart{
+							{
+								Type: event.EventMessage,
+								Content: &event.MessageEventContent{
+									MsgType:   event.MsgNotice,
+									Body:      fmt.Sprintf("Shared contact: %s", displayName),
+									RelatesTo: replyRelatesTo,
+								},
+							},
+						},
+					}, nil
+				}
 				return &bridgev2.ConvertedMessage{
 					Parts: []*bridgev2.ConvertedMessagePart{
 						{
 							Type: event.EventMessage,
 							Content: &event.MessageEventContent{
-								MsgType:   event.MsgNotice,
-								Body:      body,
+								MsgType:  event.MsgFile,
+								Body:     fileName,
+								URL:      mxc,
+								File:     file,
+								FileName: fileName,
+								Info: &event.FileInfo{
+									MimeType: "text/vcard",
+									Size:     len(vcardBytes),
+								},
 								RelatesTo: replyRelatesTo,
 							},
 						},
@@ -925,17 +951,58 @@ func (lc *LineClient) queueIncomingMessage(msg *line.Message, opType int) {
 				if displayName == "" {
 					displayName = "Unknown"
 				}
-				body := fmt.Sprintf("Shared contact: %s", displayName)
-				if unwrappedText != "" {
-					body += "\n" + unwrappedText
+				vcard := data.ContentMetadata["vCard"]
+				if vcard == "" {
+					// No vCard data — fall back to text notice
+					body := fmt.Sprintf("Shared contact: %s", displayName)
+					if unwrappedText != "" {
+						body += "\n" + unwrappedText
+					}
+					return &bridgev2.ConvertedMessage{
+						Parts: []*bridgev2.ConvertedMessagePart{
+							{
+								Type: event.EventMessage,
+								Content: &event.MessageEventContent{
+									MsgType:   event.MsgNotice,
+									Body:      body,
+									RelatesTo: replyRelatesTo,
+								},
+							},
+						},
+					}, nil
+				}
+				fileName := displayName + ".vcf"
+				vcardBytes := []byte(vcard)
+				mxc, file, err := intent.UploadMedia(ctx, portal.MXID, vcardBytes, fileName, "text/vcard")
+				if err != nil {
+					lc.UserLogin.Bridge.Log.Warn().Err(err).Msg("Failed to upload device contact vCard")
+					return &bridgev2.ConvertedMessage{
+						Parts: []*bridgev2.ConvertedMessagePart{
+							{
+								Type: event.EventMessage,
+								Content: &event.MessageEventContent{
+									MsgType:   event.MsgNotice,
+									Body:      fmt.Sprintf("Shared contact: %s", displayName),
+									RelatesTo: replyRelatesTo,
+								},
+							},
+						},
+					}, nil
 				}
 				return &bridgev2.ConvertedMessage{
 					Parts: []*bridgev2.ConvertedMessagePart{
 						{
 							Type: event.EventMessage,
 							Content: &event.MessageEventContent{
-								MsgType:   event.MsgNotice,
-								Body:      body,
+								MsgType:  event.MsgFile,
+								Body:     fileName,
+								URL:      mxc,
+								File:     file,
+								FileName: fileName,
+								Info: &event.FileInfo{
+									MimeType: "text/vcard",
+									Size:     len(vcardBytes),
+								},
 								RelatesTo: replyRelatesTo,
 							},
 						},
